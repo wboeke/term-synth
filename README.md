@@ -5,7 +5,7 @@ barebones Alsa is used for sound. A midi keyboard is to be connected. If this ke
 is provided with modulation- and pitch wheels, then sound can be modified while playing.
 
 ### Instruments
-The first instrument is a synthesizer with not too much controls. Classic waveforms
+The first instrument is a **synthesizer** with not too much controls. Classic waveforms
 are provided, plus 4 special sounds:
 - **Harmonics**. Amplitude of partials can be choosen individually, like a
 Hammond organ.
@@ -22,7 +22,7 @@ then sliders. About 20 built-in patches. The modulation wheel controls the filte
 the pitchbend wheel invokes a tremolo at 8 or 4 Hz. Clicking button `record` enables
 recording to a file named out.wav.
 
-The second instrument is more or less an organ, the amplitude of harmonics can be choosen
+The second instrument is a kind of **organ**. The amplitude of harmonics can be choosen
 arbitrarily. Clicking with the right mouse button on a grey-colored harmonic will turn it to
 black, indicating that the harmonic is to be created 2 times, at slightly different frequency.
 Then rich-sounding tones will originate.
