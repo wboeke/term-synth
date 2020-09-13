@@ -42,7 +42,8 @@ static short
   patch_nr;
 static const float
   PI2=2 * M_PI,
-  coff[modwheel_len]={ 0.5,1,1.5,2,3,7 };
+  coff[modwheel_len]={ 0.5,1,1.5,2,3,7 },
+  vol[ampl_len]={ 0.3,0.5,0.7,1,1.5 };
 
 #define oload __attribute__((overloadable))
 
@@ -84,7 +85,7 @@ static tw_HorSlider
    filt_coff,
    filt_q,
    eg2_mod_filt,
-   vib_osc;
+   trem_osc;
 static tw_VertSlider
    volume;
 static tw_Checkbox
@@ -119,8 +120,8 @@ typedef struct {
     decay,//=0.001,
     sustain,//=1.0,
     release,//=0.005,
-    vib_freq,//=7,
-    vib_osc,//=0,
+    trem_freq,//=7,
+    trem_osc,//=0,
     am_2_1,//=0,
     out_vol,//=1
     lfo1[2];//=[0,0];
@@ -149,7 +150,7 @@ typedef struct {
   short
     wform_osc1, wform_osc2, mix_1_2, detune,
     filt_mode, filt_coff, filt_q, eg2_mod_filt,
-    vib_osc, am_2_1, instr_mode;
+    trem_osc, am_2_1, instr_mode;
   Adsr_filt_data adsr_f_data;
   Adsr_amp_data adsr_a_data;
   short out_vol;
@@ -172,7 +173,7 @@ static void patch_report() {
   fprintf(stderr,"},\n    %d,%d,%d,%d, %d,%d,%d,%d, %d,%d,%d, { %d,%d,%d,%d,%d }, { %d,%d,%d,%d }, %d },\n",
     patch.wform_osc1, patch.wform_osc2, patch.mix_1_2, patch.detune,
     patch.filt_mode, patch.filt_coff, patch.filt_q, patch.eg2_mod_filt,
-    patch.vib_osc, patch.am_2_1, patch.instr_mode,
+    patch.trem_osc, patch.am_2_1, patch.instr_mode,
     patch.adsr_f_data.y0, patch.adsr_f_data.x1, patch.adsr_f_data.y1, patch.adsr_f_data.x3, patch.adsr_f_data.y3,
     patch.adsr_a_data.x1, patch.adsr_a_data.x2, patch.adsr_a_data.y2, patch.adsr_a_data.x4,
     patch.out_vol
@@ -254,7 +255,7 @@ static Lfo lfo1;
 static void set_lfo(Values *v,int i) {
   float mix=(float)i / nr_samples;
   v->lfo1_tmp=vcom.lfo1[0] * (1 - mix) + vcom.lfo1[1] * mix;
-  v->mod_amp_1=v->lfo1_tmp * vcom.vib_osc;
+  v->mod_amp_1=v->lfo1_tmp * vcom.trem_osc;
 }
 
 static float filter_24db(Values *v, float input) {
@@ -268,9 +269,7 @@ static float filter_24db(Values *v, float input) {
     L_P = g * B_P + v->d2;
   v->d1 = g * H_P + B_P;
   v->d2 = g * B_P + L_P;
-  float out1= mode==eLP ? L_P :
-              mode==eBP ? B_P :
-              mode==eHP ? H_P : 0;
+  float out1= mode==eLP ? L_P : mode==eBP ? B_P : mode==eHP ? H_P : 0;
   H_P = (out1 - (vcom.qres + g) * v->d3 - v->d4)/(1 + vcom.qres * g + g * g),
   B_P = g * H_P + v->d3,
   L_P = g * B_P + v->d4;
@@ -408,14 +407,14 @@ void keyb_noteOff(uint8_t midi_nr) {
   }
 }
 
-static float interpol(float fi) {
+static float interpol(const float *arr, float fi, const int arr_len) {
     const int ind1=fi,
-              ind2=tw_min(ind1+1,modwheel_len-1);
+              ind2=tw_min(ind1+1,arr_len-1);
     float mix=fi - (float)ind1;
-    return coff[ind1] * (1. - mix) + coff[ind2] * mix;
+    return arr[ind1] * (1. - mix) + arr[ind2] * mix;
 }
 
-static void modWheel(uint8_t val) { // modulation wheel
+static void modWheel(uint8_t val) {   // modulation wheel
   int ind=lrint(val / 128. * modwheel_len);
   if (ind!=patch.filt_coff) {
     patch.filt_coff=tw_minmax(0,ind,modwheel_len-1);
@@ -423,10 +422,10 @@ static void modWheel(uint8_t val) { // modulation wheel
     hor_slider_draw(&filt_coff);
     fflush(stdout); // else no complete draw
   }
-  vcom.fixed_cutoff=interpol((float)val * modwheel_len / 128.);
+  vcom.fixed_cutoff=interpol(coff, (float)val * modwheel_len / 128., modwheel_len);
 }
 
-static void amplCtrl(uint8_t val) { // modulation wheel
+static void amplCtrl(uint8_t val) { // volume knob
   int ind=val * ampl_len / 128;
   if (ind!=patch.out_vol) {
     patch.out_vol=tw_minmax(0,ind,ampl_len-1);
@@ -434,18 +433,17 @@ static void amplCtrl(uint8_t val) { // modulation wheel
     vert_slider_draw(&volume);
     fflush(stdout); // else no complete draw
   }
-  vcom.out_vol=interpol((float)val * ampl_len / 128.);
+  vcom.out_vol=interpol(vol, (float)val * ampl_len / 128., ampl_len);
 }
 
 static void pitchWheel(uint8_t val) {
   int ind=val * pitwheel_len / 128;
-  if (ind!=patch.vib_osc) {
-    patch.vib_osc=tw_minmax(0,ind,pitwheel_len-1);
-    vib_osc.cmd();
-    hor_slider_draw(&vib_osc);
+  if (ind!=patch.trem_osc) {
+    patch.trem_osc=tw_minmax(0,ind,pitwheel_len-1);
+    trem_osc.cmd();
+    hor_slider_draw(&trem_osc);
     fflush(stdout);
   }
-  vcom.fixed_cutoff=interpol((float)val * modwheel_len / 128.);
 }
 
 void stop_conn_mk() {
@@ -472,7 +470,7 @@ static void slow_add(float *act_val,const float nom_val,const float add_val) {
 
 static void once_per_frame() {
   vcom.lfo1[0]=vcom.lfo1[1];
-  vcom.lfo1[1]=get(&lfo1,vcom.vib_freq);
+  vcom.lfo1[1]=get(&lfo1,vcom.trem_freq);
 }
 
 static float sawtooth(float pos) {
@@ -1009,7 +1007,7 @@ static void upd_titles() { // update sliders
   filt_coff.cmd();
   filt_q.cmd();
   eg2_mod_filt.cmd();
-  vib_osc.cmd();
+  trem_osc.cmd();
   am_2_1.cmd();
   volume.cmd();
   harm_init(&harm_win1,patch.pitch_arr1);
@@ -1232,18 +1230,18 @@ int main(int argc,char **argv) {
   ); 
 
   tw_hor_slider_init(
-    &vib_osc,
+    &trem_osc,
     (Rect){47,11,0,0},
     8,
-    &patch.vib_osc,
+    &patch.trem_osc,
     ^{ float am[pitwheel_len]={ 0.7,0.5,0.2,0.1,0,0.1,0.2,0.5,0.7 };
-       vcom.vib_osc=am[patch.vib_osc];
-       sprintf(vib_osc.title,"tremolo=%g",vcom.vib_osc);
-       if (patch.vib_osc == 4) {
+       vcom.trem_osc=am[patch.trem_osc];
+       sprintf(trem_osc.title,"tremolo=%g",vcom.trem_osc);
+       if (patch.trem_osc == 4) {
          vcom.trem_enabled=false;
        } else {
          vcom.trem_enabled=true;
-         vcom.vib_freq= patch.vib_osc > 4 ? 8 : 4;
+         vcom.trem_freq= patch.trem_osc > 4 ? 8 : 4;
        }
      }
   );
@@ -1253,8 +1251,7 @@ int main(int argc,char **argv) {
     (Rect){60,6,0,0},
     4,
     &patch.out_vol,
-    ^{ float vol[ampl_len]={ 0.3,0.5,0.7,1,1.5 };
-       vcom.out_vol=vol[patch.out_vol];
+    ^{ vcom.out_vol=vol[patch.out_vol];
        strcpy(volume.title1,"volume");
        sprintf(volume.title2,"%.1f",vcom.out_vol);
      }
