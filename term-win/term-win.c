@@ -361,13 +361,14 @@ void tw_checkbox_init(tw_Checkbox *chb,Rect area,bool *val,char *tit,void (^cmd)
   add_to_list(chb,is_checkbox);
   chb->wb.area=(Rect){ area.x,area.y,2,1 };
   chb->val=val;
+  chb->on_col=col_lred;
   chb->title=tit;
   chb->cmd=cmd;
 }
 
 void checkbox_draw(tw_Checkbox *chb) {
   tw_box(chb->wb.area,col_wid_bg);
-  uint8_t col= *chb->val==1 ? col_lred : col_grey;
+  uint8_t col= *chb->val==1 ? chb->on_col : col_grey;
   tw_hline(chb->wb.area.x,2,chb->wb.area.y,col);
   tw_print(chb->wb.area.x+2,chb->wb.area.y,0,chb->title,0);
 }
