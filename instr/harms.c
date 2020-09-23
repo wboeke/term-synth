@@ -1,3 +1,5 @@
+// This code is public domain
+
 #include <stdio.h>
 #include <math.h>
 #include <pthread.h>
@@ -18,10 +20,9 @@ enum {  // const's
   num_pitch_max = 20,
   voices_max = 6, // max polyphony
   h_xgrid = 2,    // pitches distance
-  h_amp_max = 6,  // max value of harmonics
+  h_amp_max = 7,  // max value of harmonics
   rrate = 16,
   col_hbg=159, // harm background
-  pitwheel_len = 9, // pitchwheel
   subdiv=5,    // adsr
   s_len=2      // adsr
 };
@@ -37,28 +38,34 @@ int
 static const float
   mid_C = 265,
   PI2 = M_PI*2,
-  freq_scale= (float)ts_dim / sample_rate;
-
+  freq_scale= (float)ts_dim / sample_rate,
+  outvol[7]={ 0.5,0.7,1,1.4,2,3 };
+       
 enum {
   eAttack,
   eDecay,
   eSustain,
   eRelease,
-  eIdle,
-  eOff = 0,// same order as FM menu
-  eFM_id,
+  eIdle
+};
+enum {
+  eFM_id, // same order as FM menu
   eFM_half,
   eFM_1,
   eFM_12,
-  eFM_14,
-  eEqual = 0, // for semi_log()
+  eFM_14
+};
+enum {
+  eEqual, // for semi_log()
   eUp,
-  eDown
+  eDown,
+  eKc_tone,
+  eKc_noise
 };
 
 static struct {
   float
-    act_output_ampl,
+    output_ampl,
     fm_det,
     modwheel_val,
     pitwheel_val,
@@ -70,6 +77,8 @@ static struct {
     lfo2[2];
   bool
     trem_enabled;
+  int8_t
+    kc_type;
 } vcom;
 
 typedef struct {
@@ -94,96 +103,88 @@ static Patch
   { .name="rich organ",
     .pitch_arr={0,5,2,3,0,2,0,0,2,0,0,1,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=3, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=0, .detune_fm=0, .detune_2p=3, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=-1, .out_volume=4, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { .name="low organ",
     .pitch_arr={5,5,0,5,0,2,0,2,0,3,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=2, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=4, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=0, .detune_fm=0, .detune_2p=2, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=3, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { .name="weird organ",
     .pitch_arr={0,5,0,0,4,0,0,0,3,0,0,0,4,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
-    .fm_modu=2, .detune_fm=0, .detune_2p=2, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=1, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=2, .detune_fm=0, .detune_2p=2, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=0, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { .name="wonky organ",
     .pitch_arr={0,0,0,5,0,0,0,5,0,0,0,4,0,0,0,2,0,0,0,0},
     .two_pitch={0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0},
-    .fm_modu=4, .detune_fm=3, .detune_2p=4, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=4, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=4, .detune_fm=3, .detune_2p=4, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=3, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
-  { "piano1", {0,0,0,5,0,5,0,0,0,0,0,1,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0},
-    3,1,1,2,3,1,4,4,4,0,5,0,3 },
+  { "piano1", {0,0,0,5,0,5,0,0,0,0,0,3,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0},
+    3,1,2,1,3,1,4,3,3, 0,5,0,3 },
   { .name="piano2",
     .pitch_arr={0,5,0,5,0,5,0,2,0,2,0,2,0,0,0,2,0,0,0,0},
     .two_pitch={0,1,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=1, .kc_mode=2, .kc_dur=3, .kc_amp=1, .trem_val=4,
-    .non_lin=0, .out_volume=3, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
+    .fm_modu=0, .detune_fm=0, .detune_2p=1, .kc_mode=1, .kc_dur=3, .kc_amp=1, .trem_val=4,
+    .non_lin=-1, .out_volume=3, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
   },
-  { .name="el.piano1",
-    .pitch_arr={0,5,2,3,0,3,0,0,0,0,0,2,0,0,0,2,0,0,0,0},
-    .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=3, .kc_dur=6, .kc_amp=2, .trem_val=7,
-    .non_lin=1, .out_volume=2, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
-  },
+  { "el.piano1", {0,5,2,3,0,3,0,0,0,0,0,2,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    0,0,0,2,6,3,5,0,3, 0,5,0,3 },
   { "el.piano2", {0,0,0,5,0,0,0,5,0,0,0,3,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    4,2,0,3,4,2,4,4,4,0,5,0,3 },
+    4,2,0,2,4,2,4,3,4, 0,5,0,3 },
   { "el.piano3", {0,0,3,0,0,5,0,0,2,0,0,2,0,0,2,0,0,0,0,0}, {0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
-    3,0,1,2,3,1,4,3,4,0,5,0,3 },
-  { .name="hammond1",
-    .pitch_arr={5,3,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=3, .kc_dur=4, .kc_amp=1, .trem_val=7,
-    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=1, .adsr_x4=3
-  },
+    3,0,1,1,3,1,4,2,4, 0,5,0,3 },
+  { "hammond1", {6,3,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    0,0,0,3,2,2,6,-1,4, 0,5,1,3 },
   { "hammond2", {5,5,5,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    0,0,0,3,3,2,4,0,4,0,5,1,3 },
+    0,0,0,3,2,2,5,0,4, 0,5,1,3 },
   { .name="wurlizer",
     .pitch_arr={0,3,0,0,0,3,0,0,0,5,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=2, .detune_fm=0, .detune_2p=2, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=1, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
+    .fm_modu=2, .detune_fm=0, .detune_2p=2, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
   },
   { "bass1", {3,5,3,2,1,1,0,0,0,0,0,0,0,0,1,1,1,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    2,4,0,0,0,0,4,3,4,0,4,0,3 },
+    2,4,0,-1,0,0,4,2,4, 0,4,0,3 },
   { .name="bass2",
     .pitch_arr={5,4,3,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=3, .detune_fm=4, .detune_2p=0, .kc_mode=1, .kc_dur=4, .kc_amp=1, .trem_val=4,
-    .non_lin=4, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
+    .fm_modu=3, .detune_fm=4, .detune_2p=0, .kc_mode=0, .kc_dur=4, .kc_amp=1, .trem_val=4,
+    .non_lin=3, .out_volume=5, .adsr_x1=0, .adsr_x2=2, .adsr_y2=0, .adsr_x4=3
   },
   { .name="church bell",
     .pitch_arr={0,5,0,0,4,0,0,3,0,0,0,4,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=2, .detune_fm=0, .detune_2p=3, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=1, .out_volume=4, .adsr_x1=1, .adsr_x2=4, .adsr_y2=0, .adsr_x4=5
+    .fm_modu=2, .detune_fm=0, .detune_2p=3, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=0, .out_volume=4, .adsr_x1=1, .adsr_x2=4, .adsr_y2=0, .adsr_x4=5
   },
   { .name="dreamy",
     .pitch_arr={0,2,0,5,0,2,0,2,0,5,0,0,0,0,0,0,0,0,0,2},
     .two_pitch={0,1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=3, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=7,
-    .non_lin=0, .out_volume=4, .adsr_x1=5, .adsr_x2=5, .adsr_y2=0, .adsr_x4=5
+    .fm_modu=0, .detune_fm=0, .detune_2p=3, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=2,
+    .non_lin=-1, .out_volume=4, .adsr_x1=5, .adsr_x2=5, .adsr_y2=0, .adsr_x4=5
   },
   { .name="vibraphone",
     .pitch_arr={0,0,0,5,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=1, .detune_fm=3, .detune_2p=4, .kc_mode=2, .kc_dur=4, .kc_amp=1, .trem_val=4,
-    .non_lin=1, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
+    .fm_modu=1, .detune_fm=3, .detune_2p=4, .kc_mode=1, .kc_dur=4, .kc_amp=1, .trem_val=4,
+    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
   },
   { .name="key click",
     .pitch_arr={0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=2, .kc_dur=6, .kc_amp=3, .trem_val=4,
-    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=1, .kc_dur=6, .kc_amp=3, .trem_val=4,
+    .non_lin=-1, .out_volume=4, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { .name="test",
     .pitch_arr={0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=0, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=0, .out_volume=4, .adsr_x1=0, .adsr_x2=2, .adsr_y2=1, .adsr_x4=3
+    .fm_modu=0, .detune_fm=0, .detune_2p=0, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
+    .non_lin=-1, .out_volume=4, .adsr_x1=0, .adsr_x2=2, .adsr_y2=1, .adsr_x4=3
   }
 };
 
@@ -263,7 +264,7 @@ static struct {
   void (^harm_mouse)(tw_Custom* harmon,short ev_x,short ev_y,short mode,short button);
 } harm= {
   .draw_harm_line=^(tw_Custom *h,short h_nr) {
-    Rect r = h->wb.area;
+    Rect r = h->wb.area; ++r.y; --r.h;
     tw_vline(r.x + h_nr * h_xgrid, r.y , r.h, col_hbg); // erase old line
     short h_amp = patch.pitch_arr[h_nr-1];
     if (h_amp>0) {
@@ -272,7 +273,7 @@ static struct {
     }
   },
   .harm_draw=^(tw_Custom *h) {
-    Rect r = h->wb.area;
+    Rect r = h->wb.area; ++r.y; --r.h;
     tw_box(r,col_hbg);
     for (short i=0;i<num_pitch_max;++i) {
       short h_nr = i+1;
@@ -374,7 +375,6 @@ static struct {
         lst_x,
         lst_y;
   short *x1,*x2,*y2,*x4;
-  bool init_points;
   void (^cmd)();
 } adsr;
 
@@ -382,17 +382,6 @@ static void (^adsr_draw)(tw_Custom *bw)=^(tw_Custom *bw) {
   uint8_t(^xpos)(uint8_t)=^uint8_t(uint8_t valx){ return bw->wb.area.x + valx; };
   uint8_t(^ypos)(uint8_t)=^uint8_t(uint8_t valy){ return bw->wb.area.y + bw->wb.area.h - valy - 1; };
 
-  if (adsr.init_points) {
-    adsr.init_points=false;
-    Point pts[]={
-      {0,0},
-      {*adsr.x1,1},
-      {*adsr.x1+*adsr.x2,*adsr.y2},
-      {2 * subdiv + s_len,*adsr.y2},
-      {pts[3].x + *adsr.x4,0 }
-    };
-    memcpy(adsr.pt,pts,5*sizeof(Point));
-  }
   tw_box(bw->wb.area,col_grey);
   tw_hline(bw->wb.area.x,bw->wb.area.w,bw->wb.area.y+bw->wb.area.h,0); // clear value numbers
   for (int i=0;i<=4;++i) {
@@ -540,8 +529,14 @@ void keyb_noteOff(uint8_t midi_nr) {
   }
 }
 
+static float interpol(const float *arr, float fi, const int arr_len) {
+  const int ind1=fi,
+            ind2=tw_min(ind1+1,arr_len-1);
+  float mix=fi - (float)ind1;
+  return arr[ind1] * (1. - mix) + arr[ind2] * mix;
+}
+
 void eval_midi_mes(const uint8_t *midi_mes) {
-  int nval;
   switch(midi_mes[0]) {
     case 0x80:
       keyb_noteOff(midi_mes[1]);
@@ -551,25 +546,38 @@ void eval_midi_mes(const uint8_t *midi_mes) {
       else keyb_noteOn(midi_mes[1],midi_mes[2]);
       break;
     case 0xb0:
-      if (midi_mes[1]!=1) break;
-      vcom.modwheel_val=midi_mes[2]/128.;
-      nval=lrint(5*vcom.modwheel_val);
-      if (nval!=patch.fm_modu) {
-        patch.fm_modu=nval;
-        fm_modu.cmd();
-        hor_slider_draw(&fm_modu);
-        fflush(stdout); // <-- needed!
+      if (midi_mes[1]==1) {
+        float val=midi_mes[2]/128.;
+        int nval=lrint(5*val);
+        if (nval!=patch.fm_modu) {
+          patch.fm_modu=nval;
+          fm_modu.cmd();
+          hor_slider_draw(&fm_modu);
+          fflush(stdout); // <-- needed!
+        }
+        vcom.modwheel_val=val; // smooth control
+      }
+      else if (midi_mes[1]==7) {
+        float fval=6 * midi_mes[2] / 128.;
+        int nval=fval;
+        if (nval!=patch.out_volume) {
+          patch.out_volume=nval;
+          volume_sl.cmd();
+          hor_slider_draw(&volume_sl);
+          fflush(stdout);
+        }
+        vcom.output_ampl=interpol(outvol, fval, 6);
       }
       break;
     case 0xe0:
-      if (midi_mes[1]!=0) break;
-      vcom.pitwheel_val=midi_mes[2] / 128.;
-      nval=lrint((pitwheel_len-1)*vcom.pitwheel_val);
-      if (nval!=patch.trem_val) {
-        patch.trem_val=nval;
-        vib_sl.cmd();
-        hor_slider_draw(&vib_sl);
-        fflush(stdout); // <-- needed!
+      if (midi_mes[1]==0) {
+        int nval=lrint(8*midi_mes[2] / 128.);
+        if (nval!=patch.trem_val) {
+          patch.trem_val=nval;
+          vib_sl.cmd();
+          hor_slider_draw(&vib_sl);
+          fflush(stdout); // <-- needed!
+        }
       }
       break;
     default: break;
@@ -624,7 +632,7 @@ static float calc_eg1(Values *v,float val,uint8_t *phase) {
     case eDecay:
       semi_log(eg1.sus,eg1.decay / v->freq_track,eDown,&val,phase,eSustain); // freq dependent decay
       break;
-    case eRelease: // set by set_pfreq()
+    case eRelease:
       semi_log(0,eg1.release,eDown,&val,phase,eIdle);
       break;
     case eSustain:
@@ -653,6 +661,29 @@ static float calc_startup(Values *v,float act_stup,uint8_t *phase) {
       LOG("calc_startup: phase %d?",*phase);
   }
   return act_stup;
+}
+
+void adsr_init() {
+  adsr.pt_ind=0;
+  adsr.x1=&patch.adsr_x1;
+  adsr.x2=&patch.adsr_x2;
+  adsr.y2=&patch.adsr_y2;
+  adsr.x4=&patch.adsr_x4;
+
+  adsr.pt[0]=(Point){ 0,0 };
+  adsr.pt[1]=(Point){ *adsr.x1,1 };
+  adsr.pt[2]=(Point){ *adsr.x1+*adsr.x2,*adsr.y2 };
+  adsr.pt[3]=(Point){ 2 * subdiv + s_len,*adsr.y2 };
+  adsr.pt[4]=(Point){ adsr.pt[3].x + *adsr.x4,0 };
+
+  adsr.cmd=^{
+    float sus_vol[2]={ 0.,1. },
+          eg_diff[9]={ 1000,500,200,30,10,4,2,1,0.7 };
+    eg1.sus=sus_vol[patch.adsr_y2];
+    eg1.attack=eg_diff[patch.adsr_x1] * rrate/sample_rate;
+    eg1.decay=eg_diff[patch.adsr_x2 + 3] * rrate/sample_rate;
+    eg1.release=eg_diff[patch.adsr_x4 + 1] * rrate/sample_rate;
+  };
 }
 
 static void set_lfo(Values *v,short i) {
@@ -694,7 +725,7 @@ static float oscillator(Values *v,float fr1) {
           p_freq = v->fr_array[pit],
           *pos1 = v->osc_pos1+pit;
     if (*pos1>ts_dim) *pos1 -= ts_dim;
-    if (patch.non_lin>0) {
+    if (patch.non_lin>=0) {
       if (patch.non_lin==eFM_id) tmp=sine(&t_sin1,*pos1); else tmp=nlin_val;
       add_nlin=nlin_mult * tmp * ts_dim * 0.1;
     }
@@ -708,12 +739,21 @@ static float oscillator(Values *v,float fr1) {
     out += 0.7 * sine(&t_sin1,*pos2 + add_nlin) * patch.pitch_arr[pit]; // 0.7: no full canceling
     *pos2 += p_freq * (1 + pit2_det);
   }
-  if (v->stup_phase==eAttack && patch.kc_mode>=1) { // key-click tone
-    if (v->stup_pos>ts_dim) v->stup_pos -= ts_dim;
-    if (v->stup_pos<ts_dim/2) { // sine burst
-      out += vcom.kc_amp * v->stup_amp * sine(&t_sin1,2*v->stup_pos) * 10;
+  if (v->stup_phase==eAttack && patch.kc_mode>=0) { // key-click tone
+    float mult=vcom.kc_amp * v->stup_amp;
+    if (vcom.kc_type==eKc_tone) {
+      if (v->stup_pos>ts_dim) v->stup_pos -= ts_dim;
+      if (v->stup_pos<ts_dim/2) { // sine burst
+        out += mult * sine(&t_sin1,2*v->stup_pos) * 10;
+      }
+      v->stup_pos += fr1 * vcom.kc_freq;
     }
-    v->stup_pos += fr1 * vcom.kc_freq;
+    else {
+      static int cntr;
+      static float val;
+      if (++cntr % 20==0) val=(float)(rand()) / RAND_MAX - 0.5;
+      out += mult * val * 10;
+    }
   }
   return out * (1+v->mult_am);
 }
@@ -757,7 +797,7 @@ static void* play(void* d) {
       fill_buffer(vals+v,buffer);
     }
     for (short i=0;i<nr_samples;++i) {
-      buffer[i] *= vcom.act_output_ampl;
+      buffer[i] *= vcom.output_ampl;
       mon_get(&mon_data,buffer[i]);
     }
     split(buffer,out_buf);
@@ -829,7 +869,7 @@ int main(int argc,char **argv) {
 
   tw_custom_init(
     &harmonics,
-    (Rect){1,1,(num_pitch_max+1)*h_xgrid,h_amp_max},
+    (Rect){1,0,(num_pitch_max+1)*h_xgrid,h_amp_max},
     harm.harm_draw,
     harm.harm_mouse
   );
@@ -841,19 +881,19 @@ int main(int argc,char **argv) {
       tw_print(r.x + h_nr * h_xgrid, r.y+r.h,0,buf,0);
     }
   }
-  tw_hline(r.x, r.w, r.y-1, col_lbrown);
-  tw_print(r.x + r.w/2, r.y-1, col_lbrown, "harmonics", MidAlign);
+  tw_hline(r.x, r.w, r.y, col_lbrown);
+  tw_print(r.x + r.w/2, r.y, col_lbrown, "harmonics", MidAlign);
 
   short ypos=9;
   short xpos=1;
 
   tw_menu_init(
     &fm_mode,
-    (Rect){xpos,ypos,8,7},
+    (Rect){xpos,ypos,8,6},
     &patch.non_lin,
     "FM",
-    (char*[]){ "(off)","h: id","h: .5","h: 1","h: 1+2",0 },
-    0
+    (char*[]){ "h: id","h: .5","h: 1","h: 1+2",0 },
+    ^{ if (fm_mode.prev_val==patch.non_lin) patch.non_lin=-1; }
   );
 
   xpos += 11;
@@ -866,26 +906,12 @@ int main(int argc,char **argv) {
   r = adsr_win.wb.area;
   tw_hline(r.x, r.w, r.y-1, col_lbrown);
   tw_print(r.x+r.w/2, r.y-1, col_lbrown, "ADSR", MidAlign);
-
-  adsr.pt_ind=0;
-  adsr.x1=&patch.adsr_x1;
-  adsr.x2=&patch.adsr_x2;
-  adsr.y2=&patch.adsr_y2;
-  adsr.x4=&patch.adsr_x4;
-  adsr.init_points=true;
-  adsr.cmd=^{
-    float sus_vol[2]={ 0.,1. },
-          eg_diff[9]={ 1000,500,200,30,10,4,2,1,0.7 };
-    eg1.sus=sus_vol[patch.adsr_y2];
-    eg1.attack=eg_diff[patch.adsr_x1] * rrate/sample_rate;
-    eg1.decay=eg_diff[patch.adsr_x2 + 3] * rrate/sample_rate;
-    eg1.release=eg_diff[patch.adsr_x4 + 1] * rrate/sample_rate;
-  };
+  adsr_init();
   adsr.cmd();
 
   tw_checkbox_init(
     &record,
-    (Rect){xpos+11,ypos+5,7,1},
+    (Rect){xpos,ypos+5,7,1},
     &recording,
     "record", ^{
         if (recording) {
@@ -904,28 +930,20 @@ int main(int argc,char **argv) {
         }
       }
   );
-  tw_hor_slider_init(
-    &volume_sl,
-    (Rect){xpos,ypos+4,0,0},
-    5,
-    &patch.out_volume,
-    ^{ float outvol[7]={ 0.5,0.7,1,1.4,2,3 };
-       vcom.act_output_ampl=outvol[patch.out_volume];
-       sprintf(volume_sl.title,"volume=%.1g",vcom.act_output_ampl);
-    }
-  );
-  volume_sl.cmd();
-
 
   xpos+=21;
   tw_menu_init(
     &keycl_mn,
-    (Rect){xpos,ypos,8,7},
+    (Rect){xpos,ypos,8,6},
     &patch.kc_mode,
     "keyclick",
-    (char *[]){ "(off)","f: .5","f: 1","f: 2","f: 3",0 }, // bingo!
-    ^{ float kc_freq[6]={ 0,0.5,1,2,3 };
-       vcom.kc_freq=kc_freq[patch.kc_mode];
+    (char *[]){ "f=0.5","f=1","f=2","chiff",0 }, // bingo!
+    ^{ if (keycl_mn.prev_val==patch.kc_mode) patch.kc_mode=-1;
+       if (patch.kc_mode>=0) {
+         float kc_freq[4]={ 0.5,1,2 };
+         if (patch.kc_mode<3) { vcom.kc_type=eKc_tone; vcom.kc_freq=kc_freq[patch.kc_mode]; }
+         else vcom.kc_type=eKc_noise;
+       }
      }
   );
   keycl_mn.cmd();
@@ -938,7 +956,7 @@ int main(int argc,char **argv) {
     &patch.detune_fm,
     ^{ float detun[6]={ 0,0.001,0.002,0.003,0.005,0.01 };
        vcom.fm_det=detun[patch.detune_fm];
-       sprintf(detune_fm.title,"det FM=%.1g%%",100.*vcom.fm_det);
+       sprintf(detune_fm.title,"det FM=%.1g",vcom.fm_det);
      }
   );
   detune_fm.cmd();
@@ -950,7 +968,7 @@ int main(int argc,char **argv) {
     &patch.detune_2p,
     ^{ float detun[6]={ 0,0.001,0.002,0.003,0.005,0.01 };
        vcom.pit2_det=detun[patch.detune_2p];
-       sprintf(detune_2pitch.title,"det 2p=%.1g%%",100.*vcom.pit2_det);
+       sprintf(detune_2pitch.title,"det 2p=%.1g",vcom.pit2_det);
      }
   );
   detune_2pitch.cmd();
@@ -968,7 +986,7 @@ int main(int argc,char **argv) {
 
   tw_hor_slider_init(
     &keycl_dur,
-    (Rect){xpos,ypos+=3,0,0},
+    (Rect){xpos,ypos+=2,0,0},
     6,
     &patch.kc_dur,
     ^{ float kc_dur[7]={ 0,20,10,6,3,2,1 };
@@ -994,16 +1012,27 @@ int main(int argc,char **argv) {
 
   tw_hor_slider_init(
     &vib_sl,
-    (Rect){xpos,ypos+=3,0,0},
-    pitwheel_len-1,
+    (Rect){xpos,ypos+=2,0,0},
+    8,
     &patch.trem_val,
-    ^{ float fmod_arr[pitwheel_len]={ 0.7,0.5,0.2,0.1,0,0.1,0.2,0.5,0.7 };
+    ^{ float fmod_arr[9]={ 0.7,0.4,0.2,0.1,0,0.1,0.2,0.4,0.7 };
        vcom.trem_val=fmod_arr[patch.trem_val];
        sprintf(vib_sl.title,"tremolo=%.1g",vcom.trem_val);
        vcom.trem_enabled= patch.trem_val != 4;
      }
   );
   vib_sl.cmd();
+  tw_hor_slider_init(
+    &volume_sl,
+    (Rect){xpos,ypos+=3,0,0},
+    5,
+    &patch.out_volume,
+    ^{ vcom.output_ampl=outvol[patch.out_volume];
+       sprintf(volume_sl.title,"volume=%.1g",vcom.output_ampl);
+    }
+  );
+  volume_sl.cmd();
+
 
   xpos+=13;
   tw_custom_init(
@@ -1044,7 +1073,7 @@ int main(int argc,char **argv) {
         menu_draw(&keycl_mn); keycl_mn.cmd();
         menu_draw(&fm_mode);
         harmonics.draw(&harmonics); 
-        adsr.init_points=true;
+        adsr_init();
         adsr_draw(&adsr_win);
         adsr.cmd();
     }

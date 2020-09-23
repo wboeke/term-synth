@@ -1,3 +1,13 @@
+/*
+This code is public domain. Inspiration sources:
+Formantic synthesis - created by Doc Rochebois,
+  https://www.musicdsp.org/en/latest/Synthesis/224-am-formantic-synthesis.html
+Perlin noise - invented by Artem Popov: "Using Perlin noise in sound sythesis".
+  https://lac.linuxaudio.org/2018/pdf/14-paper.pdf
+Karplus-Strong - derived from an implementation by Erik Entrich, licence: GPL.
+  https://github.com/50m30n3/SO-KL5
+*/
+
 #include <stdio.h>
 #include <math.h>
 #include <pthread.h>
@@ -187,8 +197,8 @@ static Patch bi_patches[] = {
     1,1,2,1, 0,4,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,4,0,3 }, 3 },
   { "glass harp", {0,0,0,3,3,0,0,0,0,0}, {0,0,0,3,3,0,0,0,0,0},
       3,3,2,1, 0,2,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
-  { "hammond", {3,2,0,2,0,2,0,0,0,0,0,2,0}, {},
-    3,-1,0,0, -1,0,0,0, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
+  { "hammond", {3,2,2,2,0,2,0,0,0,0,0,2,0}, {},
+    3,-1,0,0, 0,4,0,4, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
   { "organ", {4,2,2,2,0,2,0,0,0,0,0,4,0}, {0,0,2,0,0,2,0,0,0,0,0,0,0},
     3,3,2,2, -1,0,0,0, 4,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
   { "high organ", {4,2,0,0,0,0,0,0,0,0,0,2,0}, {4,2,0,0,0,0,0,0,0,0,0,0,0},
@@ -197,6 +207,8 @@ static Patch bi_patches[] = {
     0,3,0,1, 0,4,1,4, 4,4,-1,1, { 2,5,0,3,0 }, { 0,5,0,3 }, 3 },
   { "bass",    {}, {3,0,0,0,0,0,3,0,0,0},
       1,3,0,1, 0,2,1,4, 4,3,-1,0, { 2,5,0,3,0 }, { 0,5,0,3 }, 3 },
+  { "short bass", {}, {3,0,3,0,0,0,0,0,0,0,0,0,0},
+    1,3,0,1, 0,2,2,4, 4,4,-1,0, { 1,3,1,3,1 }, { 0,3,0,3 }, 4 },
   { "simple", {0,0,3,3,0,3,0,0,0,0,0}, {},
     3,-1,0,0, 0,4,2,4, 4,0,-1,-1, { 2,2,1,3,1 }, { 0,5,0,3 }, 3 },
   { "wow",     {}, {0,0,0,3,3,0,0,0,0,0},
@@ -241,7 +253,8 @@ typedef struct {
     osc1_pos, osc2_pos,
     f1,f2,f3,f4,
     a1,a2,a3,a4,
-    ks_buffer[stringlen_max];
+    ks_buffer[stringlen_max],
+    stringcutoff;
   short
     eg1_phase,//=Idle,
     eg2_phase,//=Decay,
@@ -331,7 +344,9 @@ void init_custom_formant(Values *v) {
 float rand_val() { return rand() / (float)RAND_MAX * 2.0 - 1.0; }
 
 void init_string(Values *v) {
+  v->stringlen=lrint(sample_rate / v->freq);
   v->stringpos=0;
+  v->stringcutoff = tw_fminmax(0.5,v->freq_track/2,0.8);
   if (patch.instr_mode<0)
     patch.instr_mode=Mode0; // menu not updated
   switch (patch.instr_mode) {
@@ -346,7 +361,7 @@ void init_string(Values *v) {
     break;
     case Mode1: {
       for (int i = 0; i < v->stringlen; ++i) {
-        float f=2 * M_PI * i / v->stringlen;
+        float f=PI2 * i / v->stringlen;
         v->ks_buffer[i]=(sinf(f)+sinf(2*f)+sinf(3*f)+sinf(8*f)) * 0.5;
       }
     }
@@ -378,7 +393,6 @@ static void set_pfreq(Values *v, uint8_t mnr, bool down, float key_veloc) {
       }
     }
     else if (patch.wform_osc1==KarpStrong && v->freq>ks_min_freq) {
-      v->stringlen=lrint(sample_rate / v->freq);
       init_string(v);
     }
   }
@@ -580,18 +594,11 @@ float formant(Values *v, float pos) {
 
 float ks(Values *v) {
   float *p=v->ks_buffer + v->stringpos;
-  const float damp=0.9;
+  const float damp=v->stringcutoff;
   if (v->stringpos>0)
     *p = *p * damp + *(p - 1) * (1. - damp);
   else
     *p = *p * damp + v->ks_buffer[v->stringlen-1] * (1. - damp);
-/*
-  if (v->stringpos>0)
-    *p += *(p - 1) * 0.1;
-  else
-    *p += v->ks_buffer[v->stringlen-1] * 0.1;
-  *p *= 0.91 - fabs(*p) * 0.01;
-*/
   if (++v->stringpos >= v->stringlen)
     v->stringpos = 0;
   return *p;
@@ -643,10 +650,9 @@ static void fill_buffer(Values *v, float *buffer) {
           break;
         case Decay:
           v->eg1_val = (v->eg1_val-vcom.sustain) * (1.-vcom.decay * v->freq_track) + vcom.sustain;
-          if (v->eg1_val<0.01) v->eg1_phase=Idle;
           break;
         case Release:
-          if (v->eg1_val<0.05) v->eg1_val *= 0.99;
+          if (v->eg1_val<0.02) v->eg1_val *= 0.99;
           else v->eg1_val *= 1. - vcom.release;
           if (v->eg1_val<0.001) v->eg1_phase=Idle;
           break;
@@ -661,17 +667,14 @@ static void fill_buffer(Values *v, float *buffer) {
           else { v->eg2_phase=Decay; goto start; }
         case Decay: {
           float lev=vcom.sustain_f;
-          v->eg2_val = (v->eg2_val-lev) * (1. - vcom.decay_f) + lev;
+          v->eg2_val = (v->eg2_val-lev) * (1. - vcom.decay_f * v->freq_track) + lev;
           if (fabs(v->eg2_val-lev) < 0.01) v->eg2_phase=Sustain;
           }
           break;
-        case Sustain:
-        case Idle:
-          break;
         case Release: {
-          float lev=vcom.end_lev_f;
-          v->eg2_val = (v->eg2_val-lev) * (1. - vcom.release_f) + lev;
-          if (fabs(v->eg2_val - lev) < 0.02) v->eg2_phase=Idle;
+            float lev=vcom.end_lev_f;
+            v->eg2_val = (v->eg2_val-lev) * (1. - vcom.release_f) + lev;
+            if (fabs(v->eg2_val - lev) < 0.02) v->eg2_phase=Idle;
           }
           break;
         default: break;
@@ -682,6 +685,7 @@ static void fill_buffer(Values *v, float *buffer) {
       );
       slow_add(&v->filt_cutoff,tmp,v->freq_scale*0.01);
     }
+    if (v->eg1_phase==Idle) continue;
     buffer[i] += filter_24db(v,oscillator(v)) * v->velocity * vcom.out_vol * 0.3;
   }
 }
@@ -1025,6 +1029,11 @@ static void upd_titles() { // update sliders
   trem_osc.cmd();
   amfm_2_1.cmd();
   volume.cmd();
+  switch (patch.wform_osc1) {
+    case Formant: instr_mode.labels[0]="rand"; instr_mode.labels[1]="cust"; break;
+    case KarpStrong: instr_mode.labels[0]="noise"; instr_mode.labels[1]="sines"; break;
+    default: instr_mode.labels[0]=instr_mode.labels[1]="";
+  }
   harm_init(&harm_win1,patch.pitch_arr1);
   harm_init(&harm_win2,patch.pitch_arr2);
   adsr_init(&adsr_filt);
@@ -1163,25 +1172,25 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &instr_mode,
-    (Rect){32,10,6,2},
+    (Rect){32,9,12,2},
     &patch.instr_mode,
     "mode",
-    (char*[]){ "0","1",0 },
+    (char*[]){ "","",0 },
     ^{ if (instr_mode.prev_val==patch.instr_mode) patch.instr_mode=-1; }
   );
 
   tw_menu_init(
     &mod_mode,
-    (Rect){39,10,8,2},
+    (Rect){32,12,8,2},
     &patch.mod_mode,
-    "modul.",
+    "modul",
     (char*[]){ "AM","FM",0 },
     ^{ if (mod_mode.prev_val==patch.mod_mode) patch.mod_mode=-1; }
   );
 
   tw_menu_init(
     &filter_mode,
-    (Rect){32,7,12,2},
+    (Rect){32,6,12,2},
     &patch.filt_mode,
     "filter",
     (char*[]){ "LP","BP","HP",0 },
@@ -1289,7 +1298,7 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &patches,
-    (Rect){82,1,26,12},
+    (Rect){82,1,28,12},
     &patch_nr,
     "patches",
     patch_names,

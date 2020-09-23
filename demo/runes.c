@@ -27,7 +27,11 @@ void draw_runes() {
 
 int main(int argc,char **argv) {
   if (argc>1) base=strtol(argv[1],0,16);
-
+  read_screen_dim(&tw_colums,&tw_rows);
+  if (tw_colums<110 || tw_rows<35) {
+    printf("window = %d x %d (must be 110 x 35)\n",tw_colums,tw_rows);
+    return 1;
+  }
   tw_gui_init();
   draw_runes();
   tw_hor_slider_init(

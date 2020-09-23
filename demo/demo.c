@@ -67,6 +67,11 @@ void (^cust_mouse)(tw_Custom*,short,short,short,short)=^(tw_Custom* cust,short x
 };
 
 int main(int argc,char **argv) {
+  read_screen_dim(&tw_colums,&tw_rows);
+  if (tw_colums<62 || tw_rows<11) {
+    printf("window = %d x %d (must be 62 x 11)\n",tw_colums,tw_rows);
+    return 1;
+  }
   tw_gui_init();
   
   tw_button_init(
