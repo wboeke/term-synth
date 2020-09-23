@@ -120,6 +120,7 @@ typedef struct {
 typedef struct {
   WBase wb;
   bool *val;
+  int8_t on_col;
   char *title;
   void (^cmd)();
 } tw_Checkbox;
