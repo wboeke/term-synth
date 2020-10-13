@@ -15,7 +15,6 @@
 #include "shared.h"
 
 enum {  // const's
-  ts_dim = 200,
   sample_rate = 44100, nr_samples = 512, nr_channels=2,
   num_pitch_max = 20,
   voices_max = 6, // max polyphony
@@ -29,6 +28,7 @@ enum {  // const's
 
 static short
   patch_nr,
+  clip_val,
   mnr2vnr[128];
 static bool
   recording,
@@ -38,9 +38,9 @@ int
 static const float
   mid_C = 265,
   PI2 = M_PI*2,
-  freq_scale= (float)ts_dim / sample_rate,
-  outvol[7]={ 0.5,0.7,1,1.4,2,3 };
-       
+  outvol[6]={ 0.5,0.7,1,1.4,2,3 },
+  fm_modul[]={ 0.,0.3,0.6,1,1.5,2,3,5 };
+            
 enum {
   eAttack,
   eDecay,
@@ -53,7 +53,7 @@ enum {
   eFM_half,
   eFM_1,
   eFM_12,
-  eFM_14
+  eFM_2h
 };
 enum {
   eEqual, // for semi_log()
@@ -74,7 +74,8 @@ static struct {
     kc_freq,
     kc_amp,
     trem_val,
-    lfo2[2];
+    clip_val,
+    lfo_val[2];
   bool
     trem_enabled;
   int8_t
@@ -97,9 +98,8 @@ typedef struct {
     adsr_x1, adsr_x2, adsr_y2, adsr_x4;
 } Patch;
 
-static Patch
-  patch,
-  bi_patches[]= {
+static Patch patch;
+static Patch bi_patches[]= {
   { .name="rich organ",
     .pitch_arr={0,5,2,3,0,2,0,0,2,0,0,1,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0},
@@ -110,7 +110,7 @@ static Patch
     .pitch_arr={5,5,0,5,0,2,0,2,0,3,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0},
     .fm_modu=0, .detune_fm=0, .detune_2p=2, .kc_mode=-1, .kc_dur=0, .kc_amp=0, .trem_val=4,
-    .non_lin=3, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
+    .non_lin=-1, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { .name="weird organ",
     .pitch_arr={0,5,0,0,4,0,0,0,3,0,0,0,4,0,0,0,0,0,0,0},
@@ -125,7 +125,7 @@ static Patch
     .non_lin=3, .out_volume=3, .adsr_x1=0, .adsr_x2=3, .adsr_y2=1, .adsr_x4=3
   },
   { "piano1", {0,0,0,5,0,5,0,0,0,0,0,3,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0},
-    3,1,2,1,3,1,4,3,3, 0,5,0,3 },
+    2,1,2,1,3,1,4,3,3, 0,5,0,3 },
   { .name="piano2",
     .pitch_arr={0,5,0,5,0,5,0,2,0,2,0,2,0,0,0,2,0,0,0,0},
     .two_pitch={0,1,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0},
@@ -136,12 +136,16 @@ static Patch
     0,0,0,2,6,3,5,0,3, 0,5,0,3 },
   { "el.piano2", {0,0,0,5,0,0,0,5,0,0,0,3,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     4,2,0,2,4,2,4,3,4, 0,5,0,3 },
-  { "el.piano3", {0,0,3,0,0,5,0,0,2,0,0,2,0,0,2,0,0,0,0,0}, {0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
-    3,0,1,1,3,1,4,2,4, 0,5,0,3 },
+  { "el.piano3", {0,5,0,5,4}, {0,0,0,0,1},
+    1,0,4,-1,0,0,4,0,4, 0,5,0,3 },
   { "hammond1", {6,3,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     0,0,0,3,2,2,6,-1,4, 0,5,1,3 },
   { "hammond2", {5,5,5,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     0,0,0,3,2,2,5,0,4, 0,5,1,3 },
+  { "clav1", {0,5,5,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    5,1,0,2,3,2,4,4,3, 0,5,0,3 },
+  { "clav2", {0,0,3,0,0,5,0,0,2,0,0,2,0,0,2,0,0,0,0,0}, {0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
+    3,0,1,1,3,1,4,2,4, 0,5,0,3 },
   { .name="wurlizer",
     .pitch_arr={0,3,0,0,0,3,0,0,0,5,0,0,0,0,0,0,0,0,0,0},
     .two_pitch={0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
@@ -217,7 +221,6 @@ typedef struct {
     fm_pos,
     lfo2_tmp,
     stup_pos,
-    fr_val1,
     mult_am,
     freq_track,
     fr_array[num_pitch_max],
@@ -233,12 +236,13 @@ typedef struct {
 
 static tw_HorSlider
   volume_sl,
-  fm_modu,
+  fm_modul_sl,
   vib_sl,
   keycl_amp,
   keycl_dur,
   detune_fm,
-  detune_2pitch;
+  detune_2pitch,
+  clip_sl;
 
 static tw_Menu
   patch_mn,
@@ -253,7 +257,6 @@ static tw_Custom
   harmonics,
   monitor,
   adsr_win;
-
 
 static Values
   vals[voices_max];
@@ -348,25 +351,6 @@ static float get(struct Lfo *lfo, float freq) {
   if (lfo->lfo_pos>2) lfo->dir=false;
   else if (lfo->lfo_pos<-2) lfo->dir=true;
   return tw_fminmax(-1,lfo->lfo_pos,1);
-}
-
-typedef struct {
-  float sin_table[ts_dim];
-  short mode;
-} TableSin;
-
-static TableSin t_sin1, t_sin2, t_sin3, t_sin4;
-
-static void tsin_set(TableSin *ts,short mode) {
-  for (int i=0;i<ts_dim;++i) {
-    float ind=i*PI2/ts_dim;
-    switch (mode) {
-      case eFM_1: ts->sin_table[i] = 1.4 * sinf(ind); break;
-      case eFM_half: ts->sin_table[i]= sinf(ind/2); break;
-      case eFM_12: ts->sin_table[i]= sinf(ind)-sinf(ind*2); break;
-      case eFM_14: ts->sin_table[i]= sinf(ind)-sinf(ind*4); break;
-    }
-  }
 }
 
 static struct {
@@ -482,10 +466,10 @@ static void set_pfreq(Values *v,uint8_t mnr,bool down,float key_veloc) {
   if (down) {
     v->midi_nr=mnr;
     uint8_t mnr2=tw_max(30,mnr);
-    v->freq_track=60./mnr2;
+    v->freq_track=mnr2/60.; // mnr=60-24: 0.5, mnr=60+24: 1.2
     v->freq_val=  mnr2freq(mnr);
     for (short pit=0;pit<num_pitch_max;++pit) {
-      v->fr_array[pit]=freq_scale * v->freq_val * (pit+1) / 2.;  // 2: subdiv of octave in fr_array[]
+      v->fr_array[pit]= PI2/sample_rate * v->freq_val * (pit+1) / 2.;  // 2: subdiv of octave in fr_array[]
     }
     v->eg1_val=0;
     v->act_startup=0.; v->stup_amp=1;
@@ -547,15 +531,15 @@ void eval_midi_mes(const uint8_t *midi_mes) {
       break;
     case 0xb0:
       if (midi_mes[1]==1) {
-        float val=midi_mes[2]/128.;
-        int nval=lrint(5*val);
+        float fval=7. * midi_mes[2]/128.;
+        int nval=lrint(fval);
         if (nval!=patch.fm_modu) {
           patch.fm_modu=nval;
-          fm_modu.cmd();
-          hor_slider_draw(&fm_modu);
+          fm_modul_sl.cmd();
+          hor_slider_draw(&fm_modul_sl);
           fflush(stdout); // <-- needed!
         }
-        vcom.modwheel_val=val; // smooth control
+        vcom.modwheel_val=interpol(fm_modul,fval,8); // smooth control
       }
       else if (midi_mes[1]==7) {
         float fval=6 * midi_mes[2] / 128.;
@@ -602,8 +586,8 @@ static short out_buf[2*nr_samples];
 static void once_per_frame() {
   if (vcom.trem_enabled) {
     float freq=patch.trem_val > 4 ? 8 : 4;
-    vcom.lfo2[0]=vcom.lfo2[1];
-    vcom.lfo2[1]=get(&lfo1,freq); // 4 or 8Hz
+    vcom.lfo_val[0]=vcom.lfo_val[1];
+    vcom.lfo_val[1]=get(&lfo1,freq); // 4 or 8Hz
   }
 }
 
@@ -630,7 +614,7 @@ static float calc_eg1(Values *v,float val,uint8_t *phase) {
       semi_log(1.,eg1.attack,eUp,&val,phase,eDecay);
       break;
     case eDecay:
-      semi_log(eg1.sus,eg1.decay / v->freq_track,eDown,&val,phase,eSustain); // freq dependent decay
+      semi_log(eg1.sus,eg1.decay * v->freq_track,eDown,&val,phase,eSustain); // freq dependent decay
       break;
     case eRelease:
       semi_log(0,eg1.release,eDown,&val,phase,eIdle);
@@ -688,33 +672,28 @@ void adsr_init() {
 
 static void set_lfo(Values *v,short i) {
   float mix=(float)i/nr_samples;
-  v->lfo2_tmp=vcom.lfo2[0] * (1 - mix) + vcom.lfo2[1] * mix;
+  v->lfo2_tmp=vcom.lfo_val[0] * (1 - mix) + vcom.lfo_val[1] * mix;
   if (vcom.trem_enabled) v->mult_am=v->lfo2_tmp * vcom.trem_val;
   else v->mult_am=0;
 }
 
-static float sine(TableSin *ts,float pos) {
-  short ind = pos;
-  if (ind>=0) return ts->sin_table[ind%ts_dim];
-  return -ts->sin_table[(-ind)%ts_dim];
-}
-
 static float oscillator(Values *v,float fr1) {
-  if (v->fm_pos > ts_dim) { v->fm_pos -= ts_dim; v->odd=!v->odd; }
+  if (v->fm_pos > PI2) { v->fm_pos -= PI2; v->odd=!v->odd; }
   float out=0,
         nlin_val=0;
   switch (patch.non_lin) {
-    case eFM_1: nlin_val=2 * sine(&t_sin1,v->fm_pos); break;
-    case eFM_12: nlin_val=2 * sine(&t_sin2,v->fm_pos); break;
+    case eFM_1: nlin_val=2 * sinf(v->fm_pos); break;
+    case eFM_12: nlin_val=2 * (sinf(v->fm_pos)-sinf(v->fm_pos*2)); break;
     case eFM_half:
-      if (v->odd) nlin_val=2 * -sine(&t_sin4,v->fm_pos);
-      else nlin_val=2 * sine(&t_sin4,v->fm_pos);
+      nlin_val=2 * (v->odd ? sinf(v->fm_pos*0.5) : -sinf(v->fm_pos*0.5));
       break;
-    default: nlin_val=0;
+    case eFM_2h:
+      nlin_val=2 * (v->odd ? sinf(v->fm_pos*2.5) : -sinf(v->fm_pos*2.5));
+      break;
   }
   const float
-    nlin_mult = vcom.modwheel_val * v->freq_track,
-    pit2_det = vcom.pit2_det * v->freq_track;
+    nlin_mult = vcom.modwheel_val / v->freq_track,
+    pit2_det = vcom.pit2_det / v->freq_track;
 
   v->fm_pos += fr1 * (1 + vcom.fm_det);
 
@@ -724,27 +703,26 @@ static float oscillator(Values *v,float fr1) {
           tmp=0,
           p_freq = v->fr_array[pit],
           *pos1 = v->osc_pos1+pit;
-    if (*pos1>ts_dim) *pos1 -= ts_dim;
     if (patch.non_lin>=0) {
-      if (patch.non_lin==eFM_id) tmp=sine(&t_sin1,*pos1); else tmp=nlin_val;
-      add_nlin=nlin_mult * tmp * ts_dim * 0.1;
+      if (patch.non_lin==eFM_id) tmp=sinf(*pos1); else tmp=nlin_val;
+      add_nlin=nlin_mult * tmp * PI2 * 0.1;
     }
     else add_nlin=0;
-    out += sine(&t_sin1,*pos1 + add_nlin) * patch.pitch_arr[pit];
+    out += sinf(*pos1 + add_nlin) * patch.pitch_arr[pit];
     *pos1 += p_freq;
     if (patch.two_pitch[pit]==0) continue;
 
     float *pos2 = v->osc_pos2+pit;
-    if (*pos2>ts_dim) *pos2 -= ts_dim;
-    out += 0.7 * sine(&t_sin1,*pos2 + add_nlin) * patch.pitch_arr[pit]; // 0.7: no full canceling
+    if (*pos2>PI2) *pos2 -= PI2;
+    out += sinf(*pos2 + add_nlin) * patch.pitch_arr[pit];
     *pos2 += p_freq * (1 + pit2_det);
   }
   if (v->stup_phase==eAttack && patch.kc_mode>=0) { // key-click tone
     float mult=vcom.kc_amp * v->stup_amp;
     if (vcom.kc_type==eKc_tone) {
-      if (v->stup_pos>ts_dim) v->stup_pos -= ts_dim;
-      if (v->stup_pos<ts_dim/2) { // sine burst
-        out += mult * sine(&t_sin1,2*v->stup_pos) * 10;
+      if (v->stup_pos>PI2) v->stup_pos -= PI2;
+      if (v->stup_pos<PI2/2) { // sine burst
+        out += mult * sinf(2*v->stup_pos) * 10;
       }
       v->stup_pos += fr1 * vcom.kc_freq;
     }
@@ -758,6 +736,16 @@ static float oscillator(Values *v,float fr1) {
   return out * (1+v->mult_am);
 }
 
+void clip(float *buf) { // soft clipping
+  if (!vcom.clip_val)return;
+  const float drive=vcom.clip_val,
+              mult=2;
+  for (int i=0;i<nr_samples;++i) {
+    const float x=buf[i]*mult;
+    buf[i] *= (fabs(x) + drive)/(x*x + (drive-1) * fabs(x) + 1.);
+  }
+}
+
 static void fill_buffer(Values *v,float *buffer) {
   for (int i=0;i<nr_samples;++i) {
     if (i%rrate==0) {
@@ -766,13 +754,12 @@ static void fill_buffer(Values *v,float *buffer) {
         v->act_startup=calc_startup(v,v->act_startup,&v->stup_phase);
         v->stup_amp=1 - v->act_startup * v->act_startup;
 
-        v->fr_val1=v->freq_val * freq_scale;
         v->act_ampl=v->eg1_val * v->key_velocity * 0.01; // ampl scaling
         set_lfo(v,i);
       }
     }
     if (v->eg1_phase==eIdle) continue;
-    buffer[i] += oscillator(v,v->fr_val1) * v->act_ampl;
+    buffer[i] += oscillator(v, v->freq_val * PI2 / sample_rate) * v->act_ampl;
   }
 }
 
@@ -800,6 +787,7 @@ static void* play(void* d) {
       buffer[i] *= vcom.output_ampl;
       mon_get(&mon_data,buffer[i]);
     }
+    clip(buffer);
     split(buffer,out_buf);
     if (mkb_connected && recording) {
       dump_wav(out_buf,nr_samples);
@@ -831,9 +819,8 @@ int main(int argc,char **argv) {
     printf("window = %d x %d (must be 93 x 15)\n",tw_colums,tw_rows);
     return 1;
   }
-  LOG("cols=%d rows=%d",tw_colums,tw_rows);
   if (snd_init(sample_rate,nr_samples,2) < 0) {
-    puts("pulse-audio init failed");
+    puts("Alsa init failed");
     return 1;
   }
   if (!open_midi_kb()) {
@@ -862,10 +849,6 @@ int main(int argc,char **argv) {
     vals[i].freq_val=mid_C;
     vals[i].eg1_phase=eIdle;
   }
-  tsin_set(&t_sin1,eFM_1);
-  tsin_set(&t_sin2,eFM_12);
-  tsin_set(&t_sin3,eFM_14);
-  tsin_set(&t_sin4,eFM_half);
 
   tw_custom_init(
     &harmonics,
@@ -889,10 +872,10 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &fm_mode,
-    (Rect){xpos,ypos,8,6},
+    (Rect){xpos,ypos,8,7},
     &patch.non_lin,
     "FM",
-    (char*[]){ "h: id","h: .5","h: 1","h: 1+2",0 },
+    (char*[]){ "h: id","h: .5","h: 1","h: 1+2","h: 2.5", 0 },
     ^{ if (fm_mode.prev_val==patch.non_lin) patch.non_lin=-1; }
   );
 
@@ -930,6 +913,18 @@ int main(int argc,char **argv) {
         }
       }
   );
+
+  tw_hor_slider_init(
+    &clip_sl,
+    (Rect){xpos+10,ypos+4,0,0},
+    3,
+    &clip_val,
+    ^{ float clip[]={ 0,1,2,4 };
+       vcom.clip_val=clip[clip_val];
+       sprintf(clip_sl.title,"ovdrive=%.1g",vcom.clip_val);
+     }
+  );
+  clip_sl.cmd();
 
   xpos+=21;
   tw_menu_init(
@@ -974,15 +969,15 @@ int main(int argc,char **argv) {
   detune_2pitch.cmd();
 
   tw_hor_slider_init(
-    &fm_modu,
+    &fm_modul_sl,
     (Rect){xpos,ypos+=2,0,0},
-    5,
+    7,
     &patch.fm_modu,
-    ^{ vcom.modwheel_val=patch.fm_modu / 5.;
-       sprintf(fm_modu.title,"FM amount=%.1g",vcom.modwheel_val);
+    ^{ vcom.modwheel_val=fm_modul[patch.fm_modu];
+       sprintf(fm_modul_sl.title,"FM amount=%.2g",vcom.modwheel_val);
      }
   );
-  fm_modu.cmd();
+  fm_modul_sl.cmd();
 
   tw_hor_slider_init(
     &keycl_dur,
@@ -1028,7 +1023,7 @@ int main(int argc,char **argv) {
     5,
     &patch.out_volume,
     ^{ vcom.output_ampl=outvol[patch.out_volume];
-       sprintf(volume_sl.title,"volume=%.1g",vcom.output_ampl);
+       sprintf(volume_sl.title,"volume=%.2g",vcom.output_ampl);
     }
   );
   volume_sl.cmd();
@@ -1066,7 +1061,7 @@ int main(int argc,char **argv) {
         keycl_dur.cmd(); hor_slider_draw(&keycl_dur);
         keycl_amp.cmd(); hor_slider_draw(&keycl_amp);
         volume_sl.cmd(); hor_slider_draw(&volume_sl);
-        fm_modu.cmd(); hor_slider_draw(&fm_modu);
+        fm_modul_sl.cmd(); hor_slider_draw(&fm_modul_sl);
         detune_fm.cmd(); hor_slider_draw(&detune_fm);
         detune_2pitch.cmd(); hor_slider_draw(&detune_2pitch);
         vib_sl.cmd(); hor_slider_draw(&vib_sl);

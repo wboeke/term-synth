@@ -1,3 +1,8 @@
+/*
+Karplus-Strong piano
+Derived from an implementation by Erik Entrich, licence: GPL,
+  github.com/50m30n3/SO-KL5
+*/
 #include <stdio.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -7,38 +12,55 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <unistd.h>
 
+#include <term-win.h>
 #include "shared.h"
 
-int alt=-1;  // tone
+int
+  cnt;  // for debug
+static short
+  stereo=1,
+  alt;  // tone
+static float
+  lfo1_pos,
+  lfo1[2],
+  lfo1_val;
+const float
+  PI2 = M_PI*2;
+static bool
+  recording,
+  mkb_connected;
+static tw_Menu
+  tone_mode,
+  mono_stereo;
+static tw_Checkbox
+  record;
+
 enum {
   sample_rate = 44100, nr_samples = 512, nr_channels=2,
 };
-
-const float
-  PI2 = M_PI*2;
-int
-  cnt;  // for debug
-bool
-  recording,
-  mkb_connected;
 
 pthread_t
   conn_thread,
   audio_thread;
 
-float buffer[nr_samples],
-      out_buf[2*nr_samples];
-short out_buf_s[2*nr_samples];
+static float
+  buffer[2*nr_samples];
 
-#define NUMNOTES 73
-#define BASENOTE 24
+static short
+  out_buf_s[2*nr_samples];
+
+#define NUMNOTES 85 // 73
+#define BASENOTE 12 // 24
 
 enum { busy, decaying, off };
 
 typedef struct {
   float *string,
-        stringcutoff;
+        stringcutoff,
+        z,
+        tap0, tap1;
   int note,
       stringpos,
       stringlen;
@@ -47,27 +69,28 @@ typedef struct {
 
 String strings[NUMNOTES];
 
-static float
-  *sbuf;
-
 static int minmax(int a, int x, int b) { return x>=b ? b : x<=a ? a : x; }
 static float fminmax(float a,float x,float b) { return x>b ? b : x<a ? a : x; }
 
 void init(String *string,int _note) {
   string->note = _note;
   float freq = 440.0 * powf(2.0, (string->note + BASENOTE - 69) / 12.0);
-  string->stringcutoff = fminmax(0.5,powf((float)string->note / NUMNOTES, 0.5),1.);
+  string->stringcutoff = fminmax(0.5,powf((float)string->note / NUMNOTES, 0.5),0.95);
   string->stringlen = lrint(sample_rate / freq);
-  string->string=malloc(string->stringlen*sizeof(float));
+  string->string=calloc(string->stringlen,sizeof(float));
   string->stringpos = 0;
   string->status = off;
 }
 
-void set(String *string,float *sbuf,float vol) {
+float randval() { return (float)rand() / RAND_MAX - 0.5; }
+
+void set_string(String *string,float vol) {
   //LOG("set: string=%p veloc=%.2f alt=%d",string,vol,alt);
-  float rand_val=0;
+  float rand_val=0,
+        d=0,
+        *s_buf=string->string;
   int stringlen=string->stringlen;
-  if (alt==2) { // sines
+  if (alt==2 || alt==3) { // sines
     float mult=vol * 0.15;
     for (int i = 0; i < stringlen; i++) {
       float f=2 * M_PI * i / stringlen;
@@ -76,54 +99,84 @@ void set(String *string,float *sbuf,float vol) {
     string->stringpos=0;
   }
   else {
+    float mix = vol * 0.2;   // vol = 0 -> 1
     for (int i = 0; i < stringlen; i++) {
       if (i % 10 == 0)
-        rand_val=(float)rand() / RAND_MAX - 0.5;
-      sbuf[i] = rand_val;
-    }
-    float freq = vol * 0.8;   // vol = 0 -> 1
-    for (int j = 0; j < 5; j++) { // lowpass effect at low volume
-      sbuf[0] = sbuf[0] * freq + sbuf[stringlen - 1] * (1.0 - freq);
-      for (int i = 1; i < stringlen; i++) {
-        sbuf[i] = sbuf[i] * freq + sbuf[(i - 1) % stringlen] * (1.0 - freq);
-      }
+        rand_val=randval();
+      d=mix*rand_val+(1-mix)*d; // lowpass
+      s_buf[i] = d;
     }
     float avg = 0.0;
     for (int i = 0; i < stringlen; i++)
-      avg += sbuf[i];
+      avg += s_buf[i];
     avg /= stringlen;
     string->stringpos=0;
     for (int i = 0; i < stringlen; i++)
-      string->string[i] = (sbuf[i] - avg) * vol;
+      string->string[i] = (s_buf[i] - avg) * vol;
   }
 }
 
-void get(String *string,float *sample) {
-  float damp=string->stringcutoff; //  0.5 -> 1.0
+float lowpass(String *s, float in) { // 6 db/oct
+  const float a = fmax(0.1, 2 * s->stringcutoff - 1.2),  // cof = 0.5 -> a = -0.2, cof = 1 -> a = 0.8
+              b = 1. - a;
+  //const float a = 0.2, b = 1. - a;
+  s->z = in * a + s->z * b;
+  return s->z;
+}
+float highpass(String *s, float in) { // 6 db/oct
+  float a = 0.98, b = 1. - a;
+  s->z = in * b + s->z * a;
+  return in - s->z;
+}
+
+float interpol(float *inbuf,float ind_f,int size) {
+  const int ind=ind_f;
+  const float mix=ind_f-ind;
+  if (ind>=size-1) return inbuf[ind];
+  return inbuf[ind] * (1 - mix) + inbuf[ind+1] * mix;
+}
+
+void get_sample(String *string, float *sample0, float *sample1) {
+  int s_len = string->stringlen;
   float *p=string->string + string->stringpos;
+  if (alt==4) *p = lowpass(string,*p) * 1.005;
+  else if (alt==5) *p = highpass(string,*p) * 1.01;
   if (string->status==off) {
     if (fabs(*p) > 0.001) string->status=decaying;
-    else goto end;
+    else {
+      if (alt==4 || alt==5) *p=string->z=0; // to prevent noisy residu
+      goto end;
+    }
   }
-  //if (++cnt%5000==0) printf("coff=%.3f\n",string->stringcutoff);
-
+  float damp= string->stringcutoff; //  0.5 -> 1.0
   if (string->stringpos!=0)
     *p = *p * damp + *(p - 1) * (1. - damp);
   else
-    *p = *p * damp + string->string[string->stringlen-1] * (1. - damp);
-
-  //*p=*p*1.01/(1 + fabs(*p) * 0.05); // <-- no decay
-
+    *p = *p * damp + string->string[s_len-1] * (1. - damp);
   if (string->status==busy) {
-    if (alt != 1) *p *= 0.995;
+    if (alt == 1 || alt == 3) *p *= 1.005 - fabs(*p) * 0.05; // delimit
+    else *p *= 0.995;
   }
   else *p *= 0.95;
-  *sample += *p;
-  end:
-  if (++string->stringpos >= string->stringlen) {
-    string->stringpos = 0;
-    if (string->status==decaying) string->status=off;
+  if (stereo) {
+    *sample0 += interpol(string->string, string->tap0, s_len);
+    *sample1 += interpol(string->string, string->tap1, s_len);
+  // *sample0 += string->string[(int)(string->tap0)];
+  // *sample1 += string->string[(int)(string->tap1)];
   }
+  else {
+    *sample0 += *p; *sample1 = *sample0;
+  }
+  end:
+  if (++string->stringpos >= s_len) {
+    string->stringpos = 0;
+    if (string->status==decaying)
+      string->status=off;
+  }
+  int midtap=string->stringpos - s_len * 0.25;
+  float dif=lfo1_val * s_len * 0.2;
+  string->tap0=midtap - dif; if (string->tap0<0) string->tap0 += s_len;
+  string->tap1=midtap + dif; if (string->tap1<0) string->tap1 += s_len;
 }
 
 void keyb_noteOn(uint8_t note,uint8_t velocity) {
@@ -132,7 +185,7 @@ void keyb_noteOn(uint8_t note,uint8_t velocity) {
     note -= BASENOTE;
     strings[note].status = busy;
     float vol = velocity / 128.;
-    set(strings+note,sbuf,vol);
+    set_string(strings+note,vol);
   }
 }
 
@@ -144,37 +197,36 @@ void keyb_noteOff(uint8_t note) {
   }
 }
 
-void stop_conn_mk() {
+static void stop_conn_mk() {
   if (!mkb_connected) return;
   mkb_connected=false;
 }
 
-void split(float *in_buf,float *out_buf) {
-  static float lp;
-  float
-    lpf=expf(-PI2 * 1000. / sample_rate);
-  for (int i=0;i<nr_samples;++i) {
-    lp = (1-lpf) * in_buf[i] + lpf * lp;
-    out_buf[2*i]=lp;
-    out_buf[2*i+1]=in_buf[i] - lp;
-  }
-  lp *= 0.999;  // to avoid low-freq ringing at note start
+static void set_lfo() {   // called once per frame
+  const float fr=0.3;
+  lfo1_pos +=  PI2 * fr / sample_rate * nr_samples;
+  if (lfo1_pos>PI2) lfo1_pos -= PI2;
+  lfo1[0]=lfo1[1];
+  lfo1[1]=sinf(lfo1_pos);
 }
 
 void* play(void* d) {
   while (mkb_connected) {
     bzero(buffer,sizeof(buffer));
+    set_lfo();
     for (uint fnr = 0; fnr < nr_samples; ++fnr) {
-      float sample = 0.0;
+      float mix=(float)fnr/nr_samples;
+      lfo1_val=lfo1[0] * (1 - mix) + lfo1[1] * mix;
+      float sample_0 = 0, sample_1 = 0;;
       for (int note = 0; note < NUMNOTES; note++)
-        get(strings+note, &sample);
-      buffer[fnr] = sample;
+        get_sample(strings+note, &sample_0, &sample_1);
+      buffer[2*fnr] = sample_0;
+      buffer[2*fnr+1] = sample_1;
     }
-    split(buffer,out_buf);
 
     if (mkb_connected) {
       for (int i=0;i<nr_samples*2;++i)
-        out_buf_s[i]=minmax(-32000, out_buf[i]*50000, 32000);
+        out_buf_s[i]=minmax(-32000, buffer[i]*20000, 32000);
       if (snd_write(out_buf_s,nr_samples)<0) { mkb_connected=0; break; }
       if (mkb_connected && recording)
         dump_wav(out_buf_s,nr_samples);
@@ -208,27 +260,14 @@ static void* connect_mkeyb(void* d) {
   return 0;
 }
 
-void sig_handler(int sig) {
-  switch (sig) {
-    case SIGINT:
-      putchar('\n');
-      mkb_connected=false;
-      if (audio_thread) pthread_join(audio_thread,0);
-      puts("Bye!");
-      exit(0);
-    default: printf("signal: %d\n",sig);
-  }
-}
-
 int main(int argc, char *argv[]) {
+  read_screen_dim(&tw_colums,&tw_rows);
+
   for (int note = 0; note < NUMNOTES; note++)
     init(strings+note, note);
-  float freq = 440.0 * powf(2.0, (BASENOTE - 69) / 12.0);
-  int len = sample_rate / freq;
-  sbuf = malloc(len * sizeof(float));
 
   if (snd_init(sample_rate,nr_samples,2) < 0) {
-    puts("pulse-audio init failed");
+    puts("Alsa init failed");
     return 1;
   }
   if (!open_midi_kb()) {
@@ -239,28 +278,49 @@ int main(int argc, char *argv[]) {
   pthread_create(&conn_thread,0,connect_mkeyb,0);
   pthread_create(&audio_thread, 0, play, 0);
 
-  signal(SIGINT,sig_handler);
-  puts("modify tone: <enter>\nstart/stop recording: r <enter>");
+  tw_gui_init();
+  do_exit= ^{
+    mkb_connected=false;
+    if (audio_thread) { pthread_join(audio_thread,0); audio_thread=0; }
+  };
 
-  for (char ch=0;;ch=getchar()) {
-    if (ch=='r') {
-      recording=!recording;
-      if (recording) {
-        fputs("recording ...\n",stdout);
-        init_dump_wav("out.wav",2,sample_rate);
-      }
-      else {
-        close_dump_wav();
-        fputs("stop recording ",stdout);
-      }
-      getchar();
-    }
-    else {
-      ++alt; alt%=3;
-      printf("  tone = %s",alt==0 ? "piano " :
-                           alt==1 ? "long " :
-                           alt==2 ? "sines " : "??");
-    }
-  }
+  tw_menu_init(
+    &tone_mode,
+    (Rect){1,1,10,7},
+    &alt,
+    "tone",
+    (char*[]){ "random","random steady","sines","sines steady","random lowpass","random highpass", 0 },
+    0
+  );
+
+  tw_menu_init(
+    &mono_stereo,
+    (Rect){22,1,8,3},
+    &stereo,
+    "output",
+    (char*[]){ "mono","stereo",0 },
+    0
+  );
+  tone_mode.style= mono_stereo.style= Compact;
+
+  tw_checkbox_init(
+    &record,
+    (Rect){22,7,0,0},
+    &recording,
+    "record (to out.wav)",
+    ^{ if (recording) {
+         if (!init_dump_wav("out.wav",2,sample_rate)) {
+           usleep(300000);
+           checkbox_draw(&record);
+         }
+       }
+       else
+         close_dump_wav();
+     }
+  );
+  record.on_col=col_red;
+
+  tw_draw();
+  tw_start_main_loop();
   return 0;
 }

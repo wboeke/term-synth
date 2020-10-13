@@ -1,11 +1,13 @@
 /*
 This code is public domain. Inspiration sources:
 Formantic synthesis - created by Doc Rochebois,
-  https://www.musicdsp.org/en/latest/Synthesis/224-am-formantic-synthesis.html
-Perlin noise - invented by Artem Popov: "Using Perlin noise in sound sythesis".
-  https://lac.linuxaudio.org/2018/pdf/14-paper.pdf
-Karplus-Strong - derived from an implementation by Erik Entrich, licence: GPL.
-  https://github.com/50m30n3/SO-KL5
+  www.musicdsp.org/en/latest/Synthesis/224-am-formantic-synthesis.html
+Perlin noise - invented by Artem Popov: "Using Perlin noise in sound sythesis",
+  lac.linuxaudio.org/2018/pdf/14-paper.pdf
+Karplus-Strong - derived from an implementation by Erik Entrich, licence: GPL,
+  github.com/50m30n3/SO-KL5
+The Moog filter is from:
+  github.com/ddiakopoulos/MoogLadders, file MusicDSPModel.h
 */
 
 #include <stdio.h>
@@ -24,17 +26,17 @@ Karplus-Strong - derived from an implementation by Erik Entrich, licence: GPL.
 enum {
   nr_samples=512,
   sample_rate=44100,
-  //sample_rate=22050,
-  voices_max=4,
+  rrate=8,
+  voices_max=6,
   h_xgrid = 1,
   num_pitch_max=13,
   col_hbg=194,
   col_dgrey=grey+12,
   subdiv=5,    // adsr
   s_len=2,     // adsr
-  modwheel_len=6,
+  modwheel_len=7,
   pitwheel_len=9,
-  ampl_len=5,  // volume slider
+  ampl_len=6,  // volume slider
   grad_max=0x100,
   ks_min_freq=50,
   stringlen_max=sample_rate/ks_min_freq  // karp-strong string 50Hz
@@ -52,8 +54,8 @@ static short
   patch_nr;
 static const float
   PI2=2 * M_PI,
-  coff[modwheel_len]={ 0.5,1,1.5,2,3,7 },
-  outvol[ampl_len]={ 0.3,0.5,0.7,1,1.5 };
+  coff[modwheel_len]={ 0.5,1,1.5,2,3,4.5,7 },
+  outvol[ampl_len]={ 0.3,0.5,0.7,1,1.5,2 };
 
 #define oload __attribute__((overloadable))
 
@@ -100,7 +102,7 @@ static tw_HorSlider
 static tw_VertSlider
    volume;
 static tw_Checkbox
-   connect_mkb,
+   connect_mkb, // not used
    record;
 static Harmonics
    harm_win1,
@@ -111,7 +113,7 @@ static Adsr_filt
    adsr_filt;
 
 enum { Attack, Decay, Sustain, Release, Idle };
-enum { Sine, Sawtooth, Square, Harms, Perlin, Formant, KarpStrong, Off };
+enum { Sine, Sawtooth, Square, Pulse, Harms, Perlin, Formant, KarpStrong, Off };
 enum { eLP, eBP, eHP };  // same order as filter_mode
 enum { Mode0, Mode1 };   // same order as instr_mode
 enum { eAM, eFM };       // same order as mod_mode
@@ -120,7 +122,7 @@ typedef struct {
   float
     mix_1_2,//=0.5,
     detune,//=0.0001,
-    qres,//=0.4,
+    reso,//=1.
     fixed_cutoff,//=2.0,
     eg2_mod_filt,//=1,
     start_lev_f,//=1,
@@ -194,49 +196,53 @@ static void patch_report() {
 
 static Patch bi_patches[] = {
   { "lead", {}, {},
-    2,1,2,1, 0,2,2,5, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,4,1,3 }, 3 },
+    1,1,2,1, 0,3,3,4, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,4,1,3 }, 4 },
   { "simple", {0,0,3,3,0,3,0,0,0,0,0}, {},
-    3,-1,0,0, 0,4,2,4, 4,0,-1,-1, { 2,2,1,3,1 }, { 0,5,0,3 }, 3 },
+    4,-1,0,0, 0,4,2,4, 4,0,-1,-1, { 2,2,1,3,1 }, { 0,5,0,3 }, 2 },
   { "piano", {}, {},
-    1,1,2,1, 0,4,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,4,0,3 }, 3 },
+    1,3,2,1, -1,0,0,0, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,4,0,3 }, 4 },
   { "glass harp", {0,0,0,4,4,0,0,0,0,0}, {0,0,0,4,4,0,0,0,0,0},
-      3,3,2,1, 0,2,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
-  { "hammond", {3,2,2,2,0,2,0,0,0,0,0,2,0}, {},
-    3,-1,0,0, 0,4,0,4, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
+     4,4,2,1, 0,2,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
+  { "hammond1", {3,2,2,2,0,2,0,0,0,0,0,2,0}, {},
+    4,-1,0,0, 0,4,0,4, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
+  { "hammond2", {3,3,3,0,0,0,0,0,0,0,0,2,0}, {},
+    4,-1,0,0, -1,0,0,0, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
+  { "clav", {0,3,3,0,0,3,0,0,0,0,0,0,0}, {0,0,0,0,4,0,0,0,0,0,0,0,0},
+    4,4,0,0, -1,0,0,0, 4,5,-1,1, { 2,2,1,3,0 }, { 0,5,0,3 }, 3 },
   { "organ", {4,2,2,2,0,2,0,0,0,0,0,4,0}, {0,0,2,0,0,2,0,0,0,0,0,0,0},
-    3,3,2,2, -1,0,0,0, 4,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
+    4,4,2,2, -1,0,0,0, 4,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
   { "high organ", {4,2,0,0,0,0,0,0,0,0,0,2,0}, {4,2,0,0,0,0,0,0,0,0,0,0,0},
-    3,3,2,2, 0,4,1,4, 4,0,-1,-1, { 2,4,0,3,0 }, { 0,3,1,3 }, 3 },
+    4,4,2,2, 0,4,1,4, 4,0,-1,-1, { 2,4,0,3,0 }, { 0,3,1,3 }, 3 },
   { "el.piano", {}, {0,0,0,4,0,0,0,2,0,0,0,1,0},
-    0,3,0,1, 0,4,1,4, 4,4,-1,1, { 2,5,0,3,0 }, { 0,5,0,3 }, 3 },
-  { "bass",    {}, {3,0,0,0,0,0,3,0,0,0},
-      1,3,0,1, 0,2,1,4, 4,3,-1,0, { 2,5,0,3,0 }, { 0,5,0,3 }, 3 },
+    0,4,0,1, 0,4,1,4, 4,4,-1,1, { 2,5,0,3,0 }, { 0,5,0,3 }, 2 },
+  { "bass", {}, {3,0,0,0,0,0,3,0,0,0,0,0,0},
+    1,4,0,1, 0,3,1,4, 4,3,-1,0, { 2,5,0,3,0 }, { 0,5,0,3 }, 4 },
   { "short bass", {}, {3,0,3,0,0,0,0,0,0,0,0,0,0},
-    1,3,0,1, 0,2,2,4, 4,4,-1,0, { 1,3,1,3,1 }, { 0,3,0,3 }, 4 },
+    1,4,0,1, 0,2,4,0, 4,5,-1,0, { 1,3,1,3,1 }, { 0,3,0,3 }, 4 },
   { "wow",     {}, {0,0,0,3,3,0,0,0,0,0},
-      1,3,2,1, 1,3,2,5, 6,0,-1,-1, { 2,5,0,3,0 }, { 3,5,0,4 }, 3 },
+      1,4,2,1, 1,3,2,5, 6,0,-1,-1, { 2,5,0,3,0 }, { 3,5,0,4 }, 3 },
   { "wow2", {2,4,2,0,1,3,1,0,1,2,1}, {0,0,0,0,0,2,0,0,0,0},
-    3,3,2,1, 0,3,3,3, 4,0,-1,-1, { 2,4,0,4,0 }, { 0,3,1,3 }, 2 },
+    4,4,2,1, 0,3,3,3, 4,0,-1,-1, { 2,4,0,4,0 }, { 0,3,1,3 }, 2 },
   { "church bell", {0,1,0,3,0,1,0,0,2,0}, {0,0,0,0,0,0,0,0,3,0},
-    3,3,2,1, 0,4,2,4, 4,0,-1,-1, { 2,1,1,5,1 }, { 0,5,0,4 }, 4 },
+    4,4,2,1, 0,4,2,4, 4,0,-1,-1, { 2,1,1,5,1 }, { 0,5,0,4 }, 4 },
   { "perlin noise", {}, {},
-      4,-1,0,0, 0,2,2,2, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,3,1,3 }, 2 },
+      5,-1,0,0, 0,2,2,2, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,3,1,3 }, 3 },
   { "r-formant", {}, {},
-    5,-1,0,0, -1,1,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
+    6,-1,0,0, -1,1,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 2 },
   { "c-formant", {0,4,0,0,0,0,0,0,0,4,0}, {},
-    5,-1,0,0, -1,2,1,4, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 3 },
+    6,-1,0,0, -1,2,1,4, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 2 },
   { "formant bass", {}, {},
-    5,-1,0,0, 0,3,2,4, 4,0,0,-1, { 2,3,1,3,0 }, { 1,5,0,3 }, 2 },
+    6,-1,0,0, 0,3,2,4, 4,0,0,-1, { 2,3,1,3,0 }, { 1,5,0,3 }, 2 },
   { "karp-s rand", {}, {},
-    6,-1,0,0, -1,0,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
+    7,-1,0,0, -1,0,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
   { "karp-s sines", {}, {},
-    6,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
+    7,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
   { "karp-s wow", {}, {},
-    6,-1,0,0, 2,0,2,4, 4,0,0,-1, { 2,5,1,3,2 }, { 0,3,1,3 }, 3 },
-  { "test",    {0,3,0,3,0,2,0,0,0,1}, {},
-      3,0,2,2, 0,2,2,4, 4,0,-1,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
-  { "test formant", {0,4,0,0,0,0,0,0,0,0,0}, {},
-    5,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 4 }
+    7,-1,0,0, 2,1,4,3, 4,0,0,-1, { 2,4,1,4,2 }, { 0,3,1,3 }, 3 },
+  { "filter test", {0,3,0,3,0,3,0,3,0,3,0,3,0}, {0,4,0,0,0,0,0,0,0,0,0,0,0},
+    4,4,0,0, 1,3,3,0, 4,0,-1,-1, { 2,4,1,4,0 }, { 0,3,1,3 }, 3 },
+  { "formant test", {0,4,0,0,0,0,0,0,0,0,0}, {},
+    6,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 4 }
 };
 
 typedef struct {
@@ -248,9 +254,11 @@ typedef struct {
     freq_track,
     detune_val,
     filt_cutoff,
-    d1,d2,d3,d4,
+    stage[4],
+    delay[4],
     velocity,
     lfo1_tmp,
+    k, p, rmult,
     mod_amp_1,
     osc1_pos, osc2_pos,
     f1,f2,f3,f4,
@@ -277,26 +285,43 @@ static void set_lfo(Values *v,int i) {
   v->lfo1_tmp=vcom.lfo1[0] * (1 - mix) + vcom.lfo1[1] * mix;
   v->mod_amp_1=v->lfo1_tmp * vcom.trem_osc;
 }
+bool clipping=true;
+float x_tanh(float in, float mult) {
+  return clipping ? tanhf(in * mult) / mult : in;
+}
 
-static float filter_24db(Values *v, float input) {
-// from: Virtual Analog (VA) Filter Implementation and Comparisons, by Will Pirkle
+static float moog_filter(Values *v, float input) {
   if (patch.filt_mode==-1) return input;
-  const int mode=patch.filt_mode;
-  float
-    g=v->filt_cutoff,
-    H_P = (input - (vcom.qres + g) * v->d1 - v->d2)/(1 + vcom.qres * g + g * g),
-    B_P = g * H_P + v->d1,
-    L_P = g * B_P + v->d2;
-  v->d1 = g * H_P + B_P;
-  v->d2 = g * B_P + L_P;
-  float out1= mode==eLP ? L_P : mode==eBP ? B_P : mode==eHP ? H_P : 0;
-  H_P = (out1 - (vcom.qres + g) * v->d3 - v->d4)/(1 + vcom.qres * g + g * g),
-  B_P = g * H_P + v->d3,
-  L_P = g * B_P + v->d4;
-  v->d3 = g * H_P + B_P;
-  v->d3 /= (1 + v->d3 * v->d3 * 0.02); // soft clip
-  v->d4 = g * B_P + L_P;
-  return mode==eLP ? L_P : mode==eBP ? B_P : mode==eHP ? H_P : 0;
+  float *stage=v->stage,
+        *delay=v->delay,
+        x = input - v->rmult * vcom.reso * stage[3];
+
+  // Four cascaded one-pole filters (bilinear transform)
+  stage[0] = x_tanh(x * v->p + delay[0]  * v->p - v->k * stage[0], 0.3);
+  stage[1] = stage[0] * v->p + delay[1] * v->p - v->k * stage[1];
+  stage[2] = stage[1] * v->p + delay[2] * v->p - v->k * stage[2];
+  stage[3] = stage[2] * v->p + delay[3] * v->p - v->k * stage[3];
+    
+  delay[0] = x;
+  delay[1] = stage[0];
+  delay[2] = stage[1];
+  delay[3] = stage[2];
+
+  switch (patch.filt_mode) {
+    case eLP: return 2. * stage[3];
+    case eHP: return      stage[3] - stage[0];
+    case eBP: return 3. * (stage[3] - stage[2]);
+    default: return 0;
+  }
+}
+
+void set_moog(Values *v,float f_cutoff) {
+  float cu= 2.2 * f_cutoff; // cutoff scaling
+  v->p = cu * (1.8 - 0.8 * cu);
+  v->k = 2.0 * sin(cu * M_PI * 0.5) - 1.0;
+  float t1 = (1.0 - v->p) * 1.38,
+        t2 = 12.0 + t1 * t1;
+  v->rmult = 0.18 * (t2 + 6.0 * t1) / (t2 - 6.0 * t1); // scaling: oscillation at reso = 3.5
 }
 
 static const float freqs[13]= {
@@ -385,7 +410,7 @@ static void set_pfreq(Values *v, uint8_t mnr, bool down, float key_veloc) {
     v->eg1_val=0;
     v->velocity=key_veloc;
     v->eg1_phase=v->eg2_phase=Attack;
-    v->filt_cutoff=v->freq_scale * PI2 * vcom.fixed_cutoff;
+    v->filt_cutoff= v->freq_scale * vcom.fixed_cutoff;
     if (patch.wform_osc1==Formant) {
       if (patch.instr_mode<0)
         patch.instr_mode=Mode0; // menu not updated
@@ -488,6 +513,10 @@ static float get(Lfo *lfo, float freq) {
 }
 
 static void slow_add(float *act_val,const float nom_val,const float add_val) {
+/*
+  const x=0.999, a = x, b = 1 - x;
+  *act_val=nom_val * b + *act_val * a;
+*/
   if (*act_val>nom_val+add_val) *act_val-=add_val;
   else if (*act_val<nom_val-add_val) *act_val+=add_val;
 }
@@ -496,12 +525,22 @@ static void once_per_frame() {
   vcom.lfo1[0]=vcom.lfo1[1];
   vcom.lfo1[1]=get(&lfo1,vcom.trem_freq);
 }
-
+static float sawtooth(float pos) {
+  return (pos>15./16. ? -cosf(8*pos*PI2) : 2*pos*16./15.-1) * 0.5;
+}
+/*
 static float sawtooth(float pos) {
   return (sinf(pos)+sinf(pos*2)+sinf(pos*3)/1.5+sinf(pos*4)/2+sinf(pos*5)/2.5) * 0.5;
 }
+*/
+static float pulse(float pos) { // pos: 0 -> 1
+  return (pos<0.25 ? (pos<1./16 || pos>3./16 ? 1-cosf(8*pos*PI2) : 2) : 0) - 0.5;
+}
+
 static float square(float pos) {
-  return (sinf(pos)+0.3*sinf(pos*3)+0.2*sinf(pos*5)+0.15*sinf(pos*7)) * 0.5;
+  return (pos<0.5+1./16 ? (pos<1./16 ? 1-cosf(8*pos*PI2) :
+                           pos>0.5 ? 1+cosf(8*pos*PI2) :
+                           2) : 0) - 0.5;
 }
 
 float gradients[grad_max];
@@ -618,8 +657,10 @@ static float oscillator(Values  *v) {
         mix=vcom.mix_1_2;
   switch (patch.wform_osc1) {
     case Sine: val1=sinf(pos1*PI2); break;
-    case Sawtooth: val1=sawtooth(pos1*PI2); break;
-    case Square: val1=square(pos1*PI2); break;
+    case Sawtooth: val1=sawtooth(pos1<0 ? pos1+1 : pos1); break;
+    //case Sawtooth: val1=sawtooth(pos1*PI2); break;
+    case Square: val1=square(pos1<0 ? pos1+1 : pos1); break;
+    case Pulse: val1=pulse(pos1<0 ? pos1+1 : pos1); break;
     case Harms: val1=harms(pos1*PI2,patch.pitch_arr1); break;
     case Perlin: val1=fbm(v, pos1 * 0.5 + 0.5); break; // pos: 0 -> 1, half freq
     case Formant: val1=formant(v, pos1 * PI2 * 0.5); break;  // pos: -M_PI -> M_PI, half freq
@@ -630,8 +671,9 @@ static float oscillator(Values  *v) {
   }
   switch (patch.wform_osc2) {
     case Sine: val2=sinf(pos2*PI2); break;
-    case Sawtooth: val2=sawtooth(pos2*PI2); break;
-    case Square: val2=square(pos2*PI2); break;
+    case Sawtooth: val2=sawtooth(pos2<0 ? pos2+1 : pos2); break;
+    case Square: val2=square(pos2<0 ? pos2+1 : pos2); break;
+    case Pulse: val2=pulse(pos2<0 ? pos2+1 : pos2); break;
     case Harms: val2=harms(pos2*PI2,patch.pitch_arr2); break;
   }
   if (patch.mod_mode==eAM) val1 *= (1 - vcom.amfm_2_1/2) + vcom.amfm_2_1 * val2; // vcom.amfm_2_1: 0 -> 2
@@ -643,7 +685,7 @@ static float oscillator(Values  *v) {
 
 static void fill_buffer(Values *v, float *buffer) {
   for (int i=0;i<nr_samples;++i) {
-    if (i%4==0) {
+    if (i%rrate==0) {
       switch (v->eg1_phase) {
         case Idle: return;
         case Attack:
@@ -651,7 +693,8 @@ static void fill_buffer(Values *v, float *buffer) {
           if (v->eg1_val>0.95) v->eg1_phase=Decay;
           break;
         case Decay:
-          v->eg1_val = (v->eg1_val-vcom.sustain) * (1.-vcom.decay * v->freq_track) + vcom.sustain;
+          if (v->eg1_val<0.02) v->eg1_val *= 0.99;
+          else v->eg1_val = (v->eg1_val-vcom.sustain) * (1.-vcom.decay * v->freq_track) + vcom.sustain;
           break;
         case Release:
           if (v->eg1_val<0.02) v->eg1_val *= 0.99;
@@ -681,14 +724,16 @@ static void fill_buffer(Values *v, float *buffer) {
           break;
         default: break;
       }
-      float tmp=fmax(0.005,
-        v->freq_scale * PI2 *
-        (vcom.fixed_cutoff + (v->eg2_val - 1) * vcom.eg2_mod_filt)  // eg2_val = 0 -> 2
-      );
-      slow_add(&v->filt_cutoff,tmp,v->freq_scale*0.01);
+
+      //float tmp=v->freq_scale * (vcom.fixed_cutoff + 2. * (v->eg2_val - 1) * vcom.eg2_mod_filt);// must be > 0
+      float tmp= fmaxf(0,v->freq_scale *
+        (vcom.fixed_cutoff + 2. * (v->eg2_val - 1) * vcom.eg2_mod_filt));  // eg2_val = 0 -> 2
+
+      slow_add(&v->filt_cutoff, tmp,v->freq_scale*0.002);
+      set_moog(v,v->filt_cutoff);
     }
     if (v->eg1_phase==Idle) continue;
-    buffer[i] += filter_24db(v,oscillator(v)) * v->velocity * vcom.out_vol * 0.3;
+    buffer[i] += moog_filter(v,oscillator(v)) * v->velocity * vcom.out_vol * 0.5;
   }
 }
 
@@ -797,12 +842,13 @@ static void oload adsr_init(Adsr_amp* aa) {
   };
   memcpy(aa->pt,pts,sizeof(aa->pt));
   aa->cmd=^{
+    const float mult=rrate/4;
     float eg1[6]={ 0.1, 0.01, 0.003, 0.001, 0.0003, 0.0001 };
     float sus[2]={ 0, 1. };
-    vcom.attack=eg1[patch.adsr_a_data.x1];
-    vcom.decay=eg1[patch.adsr_a_data.x2];
+    vcom.attack=eg1[patch.adsr_a_data.x1] * mult;
+    vcom.decay=eg1[patch.adsr_a_data.x2] * mult;
     vcom.sustain=sus[patch.adsr_a_data.y2];
-    vcom.release=eg1[patch.adsr_a_data.x4];
+    vcom.release=eg1[patch.adsr_a_data.x4] * mult;
   };
   aa->cmd();
 }
@@ -824,11 +870,12 @@ static void oload adsr_init(Adsr_filt* af) {
   memcpy(af->pt,pts,sizeof(af->pt));
   af->do_draw=true;
   af->cmd=^{
+    const float mult=rrate/4;
     float eg2[6]={ 0.03, 0.01, 0.003, 0.001, 0.0003, 0.0002 };
     vcom.start_lev_f=patch.adsr_f_data.y0;
-    vcom.decay_f=eg2[patch.adsr_f_data.x1];
+    vcom.decay_f=eg2[patch.adsr_f_data.x1] * mult;
     vcom.sustain_f=patch.adsr_f_data.y1;
-    vcom.release_f=eg2[patch.adsr_f_data.x3];
+    vcom.release_f=eg2[patch.adsr_f_data.x3] * mult;
     vcom.end_lev_f=patch.adsr_f_data.y3;
   };
   af->cmd();
@@ -1095,19 +1142,19 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &wform_osc1,
-    (Rect){1,1,4,8},
+    (Rect){1,1,4,9},
     &patch.wform_osc1,
     "osc1",
-    (char*[]){ "","","","","perlin","formant","karp-strong", 0 },
+    (char*[]){ "","","","","","perlin","formant","karp-strong", 0 },
     ^{ if (wform_osc1.prev_val==patch.wform_osc1) patch.wform_osc1=-1; }
   );
 
   tw_menu_init(
     &wform_osc2,
-    (Rect){6,1,4,5},
+    (Rect){6,1,4,6},
     &patch.wform_osc2,
     "osc2",
-    (char*[]){ "sine","sawtooth","square","harm's",0 },
+    (char*[]){ "sine","sawtooth","square","pulse","harm's",0 },
     ^{ if (wform_osc2.prev_val==patch.wform_osc2) patch.wform_osc2=-1; }
   );
   wform_osc1.style=wform_osc2.style=Compact;
@@ -1216,7 +1263,7 @@ int main(int argc,char **argv) {
   tw_hor_slider_init(
     &filt_coff,
     (Rect){49,3,0,0},
-    5,
+    modwheel_len-1,
     &patch.filt_coff,
     ^{ vcom.fixed_cutoff=coff[patch.filt_coff];
        sprintf(filt_coff.title,"cutoff=%g",vcom.fixed_cutoff);
@@ -1226,11 +1273,11 @@ int main(int argc,char **argv) {
   tw_hor_slider_init(
     &filt_q,
     (Rect){49,5,0,0},
-    4,
+    5,
     &patch.filt_q,
-    ^{ float q[5]={1.0,0.6,0.3,0.15,0.1};
-       vcom.qres=q[patch.filt_q];
-       sprintf(filt_q.title,"Q=%.2g",1./vcom.qres);
+    ^{ float q[6]={1, 1.5, 2, 2.5, 3, 3.5};
+       vcom.reso=q[patch.filt_q];
+       sprintf(filt_q.title,"reso=%.2g",vcom.reso);
     }
   );
 
@@ -1248,9 +1295,9 @@ int main(int argc,char **argv) {
   tw_hor_slider_init(
     &amfm_2_1,
     (Rect){49,9,0,0},
-    5,
+    6,
     &patch.amfm_2_1,
-    ^{ float afm[6]={0,0.3,0.5,0.8,1.2,2};
+    ^{ float afm[7]={0,0.3,0.5,0.8,1.2,2,3};
        vcom.amfm_2_1=afm[patch.amfm_2_1];
        sprintf(amfm_2_1.title,"AM/FM 2->1=%.2g",vcom.amfm_2_1);
      }
@@ -1283,7 +1330,7 @@ int main(int argc,char **argv) {
   tw_vert_slider_init(
     &volume,
     (Rect){65,6,0,0},
-    4,
+    ampl_len-1,
     &patch.out_vol,
     ^{ vcom.out_vol=outvol[patch.out_vol];
        strcpy(volume.title1,"volume");
@@ -1300,7 +1347,7 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &patches,
-    (Rect){82,1,28,12},
+    (Rect){82,1,28,13},
     &patch_nr,
     "patches",
     patch_names,

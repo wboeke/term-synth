@@ -1,14 +1,13 @@
 ### Introduction
-This project provides two musical instruments, with a terminal-based GUI.
+This project provides three musical instruments, each with a terminal-based GUI.
 The aim is to create good sounds, and not so much weird or funny ones. It's Linux-only,
-barebones Alsa is used for sound. A MIDI keyboard is to be connected. If this keyboard
+barebones Alsa is used for sound. A MIDI keyboard should be connected. If this keyboard
 is provided with modulation- and pitchband wheels, then the sound can be modified while playing.
 
 ### Instruments
 The first instrument is a **synthesizer** with not too much controls. Classic waveforms
 are provided, plus 4 special sounds:
-- **Harmonics**. Amplitude of harmonics can be choosen individually, like a
-Hammond organ.
+- **Harmonics**. Amplitude of harmonics can be choosen individually, like a Hammond organ.
 - **Perlin noise**, as used in 3D graphics. Adapted for the creation of sound, it gives a rough
 fluctuating tone, good for deep basses.
 - **Formant**, as used in speech synthesis. In mode `rand` the sounds of 7 vowels are provided, choosen
@@ -18,14 +17,15 @@ is evolving in subtle ways. In mode `noise` the buffers are initialised with a r
 in mode `sines` with sine's.
 
 The 2 ADSR's (for filter and amplitude) have graphical interfaces, much easier to control
-then sliders. About 20 built-in patches are provided. The modulation wheel controls the filter,
+then sliders. The filter is a Moog filter, which has desirable properties for a good sound.
+About 20 built-in patches are provided. The modulation wheel controls the filter,
 the pitchbend wheel invokes a tremolo at 8 or 4 Hz. Clicking button `record` will start
 the recording to a file named out.wav, clicking again will stop it.
 
 The second instrument is a kind of **organ**. The amplitude of harmonics can be choosen
 arbitrarily. Clicking with the right mouse button on a grey-colored harmonic line will turn it to
 black, indicating that the harmonic is to be created 2 times, at slightly different frequency.
-Then rich-sounding tones will be created.
+This is craeting rich-sounding tones.
 
 The harmonics can be FM modulated. The modulation source can be sines derived from the
 base frequency but at slightly shifted frequency, or the harmonic signal itself. While playing,
@@ -33,7 +33,12 @@ the amount of FM can be modified by the modulation wheel of your MIDI keyboard.
 The pitchbend wheel again is for tremolo.
 
 Key-click can be created at different frequencies. The amplitude and duration also can be
-choosen. There are about 20 built-in patches. 
+choosen. There are about 20 built-in patches. The output can be overdriven.
+
+The third instrument is a **piano**, modelled with the Karplus-Strong algorithm. Different
+initial waveforms can be choosen, decaying or steady.
+The piano strings are sensed by 2 virtual pickups that move  among each other,
+providing a nice stereo effect.
 
 ### Building
 Compilation only is possible with clang, because use is made of closures, a.k.a. code blocks.
