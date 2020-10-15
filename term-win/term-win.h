@@ -35,7 +35,7 @@ extern char quit_message[100];
 
 enum {  // constants
   k_esc=033,
-  max_wids=20, // max widgets
+  max_wids=50, // max widgets
   amax=40, // max array len
   grey=233
 };

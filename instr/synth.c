@@ -95,6 +95,7 @@ static tw_HorSlider
    mix_1_2,
    amfm_2_1,
    detune,
+   pitch_osc2,
    filt_coff,
    filt_q,
    eg2_mod_filt,
@@ -120,25 +121,26 @@ enum { eAM, eFM };       // same order as mod_mode
 
 typedef struct {
   float
-    mix_1_2,//=0.5,
-    detune,//=0.0001,
-    reso,//=1.
-    fixed_cutoff,//=2.0,
-    eg2_mod_filt,//=1,
-    start_lev_f,//=1,
-    decay_f,//=0.005,
-    sustain_f,//=0.5,
-    release_f,//=0.005,
-    end_lev_f,//=0,
-    attack,//=0.01,
-    decay,//=0.001,
-    sustain,//=1.0,
-    release,//=0.005,
-    trem_freq,//=7,
-    trem_osc,//=0,
-    amfm_2_1,//=0,
-    out_vol,//=1
-    lfo1[2];//=[0,0];
+    mix_1_2,
+    detune,
+    pitch_osc2,
+    reso,
+    fixed_cutoff,
+    eg2_mod_filt,
+    start_lev_f,
+    decay_f,
+    sustain_f,
+    release_f,
+    end_lev_f,
+    attack,
+    decay,
+    sustain,
+    release,
+    trem_freq,
+    trem_osc,
+    amfm_2_1,
+    out_vol,
+    lfo1[2];
   bool
     trem_enabled; 
 } Vcom;
@@ -162,7 +164,7 @@ typedef struct {
     pitch_arr1[num_pitch_max],
     pitch_arr2[num_pitch_max];
   short
-    wform_osc1, wform_osc2, mix_1_2, detune,
+    wform_osc1, wform_osc2, mix_1_2, detune, pitch_osc2,
     filt_mode, filt_coff, filt_q, eg2_mod_filt,
     trem_osc, amfm_2_1, instr_mode, mod_mode;
   Adsr_filt_data adsr_f_data;
@@ -184,8 +186,8 @@ static void patch_report() {
       if (i==0) fprintf(stderr,"%d",patch.pitch_arr2[0]);
       else fprintf(stderr,",%d",patch.pitch_arr2[i]);
     }
-  fprintf(stderr,"},\n    %d,%d,%d,%d, %d,%d,%d,%d, %d,%d,%d,%d, { %d,%d,%d,%d,%d }, { %d,%d,%d,%d }, %d },\n",
-    patch.wform_osc1, patch.wform_osc2, patch.mix_1_2, patch.detune,
+  fprintf(stderr,"},\n    %d,%d,%d,%d,%d, %d,%d,%d,%d, %d,%d,%d,%d, { %d,%d,%d,%d,%d }, { %d,%d,%d,%d }, %d },\n",
+    patch.wform_osc1, patch.wform_osc2, patch.mix_1_2, patch.detune, patch.pitch_osc2,
     patch.filt_mode, patch.filt_coff, patch.filt_q, patch.eg2_mod_filt,
     patch.trem_osc, patch.amfm_2_1, patch.instr_mode, patch.mod_mode,
     patch.adsr_f_data.y0, patch.adsr_f_data.x1, patch.adsr_f_data.y1, patch.adsr_f_data.x3, patch.adsr_f_data.y3,
@@ -196,53 +198,57 @@ static void patch_report() {
 
 static Patch bi_patches[] = {
   { "lead", {}, {},
-    1,1,2,1, 0,3,3,4, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,4,1,3 }, 4 },
+    1,1,2,1,2, 0,3,3,4, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,4,1,3 }, 4 },
   { "simple", {0,0,3,3,0,3,0,0,0,0,0}, {},
-    4,-1,0,0, 0,4,2,4, 4,0,-1,-1, { 2,2,1,3,1 }, { 0,5,0,3 }, 2 },
+    4,-1,0,0,2, 0,4,2,4, 4,0,-1,-1, { 2,2,1,3,1 }, { 0,5,0,3 }, 2 },
   { "piano", {}, {},
-    1,3,2,1, -1,0,0,0, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,4,0,3 }, 4 },
+    3,3,1,1,4, -1,0,0,0, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
   { "glass harp", {0,0,0,4,4,0,0,0,0,0}, {0,0,0,4,4,0,0,0,0,0},
-     4,4,2,1, 0,2,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
+     4,4,2,1,2, 0,2,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,5,0,3 }, 3 },
   { "hammond1", {3,2,2,2,0,2,0,0,0,0,0,2,0}, {},
-    4,-1,0,0, 0,4,0,4, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
+    4,-1,0,0,2, 0,4,0,4, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
   { "hammond2", {3,3,3,0,0,0,0,0,0,0,0,2,0}, {},
-    4,-1,0,0, -1,0,0,0, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
+    4,-1,0,0,2, -1,0,0,0, 5,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 1 },
   { "clav", {0,3,3,0,0,3,0,0,0,0,0,0,0}, {0,0,0,0,4,0,0,0,0,0,0,0,0},
-    4,4,0,0, -1,0,0,0, 4,5,-1,1, { 2,2,1,3,0 }, { 0,5,0,3 }, 3 },
+    4,4,0,0,2, -1,0,0,0, 4,5,-1,1, { 2,2,1,3,0 }, { 0,5,0,3 }, 3 },
   { "organ", {4,2,2,2,0,2,0,0,0,0,0,4,0}, {0,0,2,0,0,2,0,0,0,0,0,0,0},
-    4,4,2,2, -1,0,0,0, 4,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 3 },
-  { "high organ", {4,2,0,0,0,0,0,0,0,0,0,2,0}, {4,2,0,0,0,0,0,0,0,0,0,0,0},
-    4,4,2,2, 0,4,1,4, 4,0,-1,-1, { 2,4,0,3,0 }, { 0,3,1,3 }, 3 },
-  { "el.piano", {}, {0,0,0,4,0,0,0,2,0,0,0,1,0},
-    0,4,0,1, 0,4,1,4, 4,4,-1,1, { 2,5,0,3,0 }, { 0,5,0,3 }, 2 },
+    4,4,2,2,2, -1,0,0,0, 4,0,-1,-1, { 2,2,0,3,0 }, { 0,3,1,3 }, 2 },
+  { "high organ1", {0,0,0,3,0,3,0,3,0,0,0,0,0}, {0,0,0,3,0,3,0,3,0,0,0,0,0},
+    4,4,1,0,1, 0,3,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 3 },
+  { "high organ2", {0,3,0,0,0,3,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,2,0,0,0,0,0},
+    4,4,2,1,1, -1,3,1,4, 4,0,-1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 5 },
+  { "el.piano", {}, {},
+    0,1,0,3,4, 0,4,1,4, 4,6,-1,1, { 2,5,0,3,0 }, { 0,5,0,3 }, 2 },
   { "bass", {}, {3,0,0,0,0,0,3,0,0,0,0,0,0},
-    1,4,0,1, 0,3,1,4, 4,3,-1,0, { 2,5,0,3,0 }, { 0,5,0,3 }, 4 },
+    1,4,0,1,2, 0,4,1,4, 4,3,-1,0, { 2,5,0,3,0 }, { 0,5,0,3 }, 5 },
   { "short bass", {}, {3,0,3,0,0,0,0,0,0,0,0,0,0},
-    1,4,0,1, 0,2,4,0, 4,5,-1,0, { 1,3,1,3,1 }, { 0,3,0,3 }, 4 },
-  { "wow",     {}, {0,0,0,3,3,0,0,0,0,0},
-      1,4,2,1, 1,3,2,5, 6,0,-1,-1, { 2,5,0,3,0 }, { 3,5,0,4 }, 3 },
-  { "wow2", {2,4,2,0,1,3,1,0,1,2,1}, {0,0,0,0,0,2,0,0,0,0},
-    4,4,2,1, 0,3,3,3, 4,0,-1,-1, { 2,4,0,4,0 }, { 0,3,1,3 }, 2 },
-  { "church bell", {0,1,0,3,0,1,0,0,2,0}, {0,0,0,0,0,0,0,0,3,0},
-    4,4,2,1, 0,4,2,4, 4,0,-1,-1, { 2,1,1,5,1 }, { 0,5,0,4 }, 4 },
-  { "perlin noise", {}, {},
-      5,-1,0,0, 0,2,2,2, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,3,1,3 }, 3 },
-  { "r-formant", {}, {},
-    6,-1,0,0, -1,1,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 2 },
-  { "c-formant", {0,4,0,0,0,0,0,0,0,4,0}, {},
-    6,-1,0,0, -1,2,1,4, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 2 },
+    1,4,0,1,2, 0,2,4,0, 4,5,-1,0, { 1,3,1,3,1 }, { 0,3,0,3 }, 4 },
   { "formant bass", {}, {},
-    6,-1,0,0, 0,3,2,4, 4,0,0,-1, { 2,3,1,3,0 }, { 1,5,0,3 }, 2 },
-  { "karp-s rand", {}, {},
-    7,-1,0,0, -1,0,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
+    6,-1,0,0,2, 0,3,2,4, 4,0,0,-1, { 2,3,1,3,0 }, { 1,5,0,3 }, 2 },
+  { "wow1", {}, {0,0,0,3,3,0,0,0,0,0,0,0,0},
+    1,4,2,1,2, 1,4,2,4, 6,0,-1,-1, { 2,5,0,3,0 }, { 3,5,0,4 }, 4 },
+  { "wow2", {2,4,2,0,1,3,1,0,1,2,1,0,0}, {0,0,0,0,0,2,0,0,0,0,0,0,0},
+    4,4,2,1,2, 0,3,3,3, 4,0,-1,-1, { 2,4,0,4,0 }, { 0,3,1,3 }, 3 },
+  { "mellow",{},{},
+    0,1,1,1,5, 1,4,3,3, 0,0,-1,-1, { 0,4,2,3,0 },{1,5,0,3},4},
+  { "church bell", {0,1,0,3,0,1,0,0,2,0}, {0,0,0,0,0,0,0,0,3,0},
+    4,4,2,1,2, 0,4,2,4, 4,0,-1,-1, { 2,1,1,5,1 }, { 0,5,0,4 }, 4 },
+  { "perlin noise", {}, {},
+      5,-1,0,0,2, 0,2,2,2, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,3,1,3 }, 3 },
+  { "r-formant", {}, {},
+    6,-1,0,0,2, -1,1,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 2 },
+  { "c-formant", {0,4,0,0,0,0,0,0,0,4,0}, {},
+    6,-1,0,0,2, -1,2,1,4, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 2 },
+  { "karp-s random", {}, {},
+    7,-1,0,0,2, -1,0,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
   { "karp-s sines", {}, {},
-    7,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
+    7,-1,0,0,2, -1,0,0,0, 4,0,1,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 3 },
   { "karp-s wow", {}, {},
-    7,-1,0,0, 2,1,4,3, 4,0,0,-1, { 2,4,1,4,2 }, { 0,3,1,3 }, 3 },
+    7,-1,0,0,2, 2,1,4,3, 4,0,0,-1, { 2,4,1,4,2 }, { 0,3,1,3 }, 3 },
   { "filter test", {0,3,0,3,0,3,0,3,0,3,0,3,0}, {0,4,0,0,0,0,0,0,0,0,0,0,0},
-    4,4,0,0, 1,3,3,0, 4,0,-1,-1, { 2,4,1,4,0 }, { 0,3,1,3 }, 3 },
+    4,4,0,0,2, 1,3,3,0, 4,0,-1,-1, { 2,4,1,4,0 }, { 0,3,1,3 }, 3 },
   { "formant test", {0,4,0,0,0,0,0,0,0,0,0}, {},
-    6,-1,0,0, -1,0,0,0, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 4 }
+    6,-1,0,0,2, -1,0,0,0, 4,0,1,-1, { 2,3,1,3,1 }, { 0,3,1,3 }, 4 }
 };
 
 typedef struct {
@@ -253,6 +259,7 @@ typedef struct {
     freq_scale,
     freq_track,
     detune_val,
+    pitch_osc2,
     filt_cutoff,
     stage[4],
     delay[4],
@@ -650,7 +657,7 @@ static float oscillator(Values  *v) {
         pos2=v->osc2_pos;
   pos1 += v->freq_scale;
   if (pos1 > 1) pos1 -= 2;
-  pos2 += v->freq_scale + vcom.detune;
+  pos2 += vcom.pitch_osc2 * (v->freq_scale + vcom.detune);
   if (pos2 > 1) pos2 -= 2;
   v->osc1_pos=pos1; v->osc2_pos=pos2;
   float val1=0., val2=0.,
@@ -677,7 +684,7 @@ static float oscillator(Values  *v) {
     case Harms: val2=harms(pos2*PI2,patch.pitch_arr2); break;
   }
   if (patch.mod_mode==eAM) val1 *= (1 - vcom.amfm_2_1/2) + vcom.amfm_2_1 * val2; // vcom.amfm_2_1: 0 -> 2
-  else if (patch.mod_mode==eFM) v->osc1_pos += vcom.amfm_2_1 * val2 * 0.01;
+  else if (patch.mod_mode==eFM) v->osc1_pos += vcom.amfm_2_1 * val2 * 0.015;
   if (vcom.trem_enabled)
     return (val1 * (1. - mix) * (1 + v->mod_amp_1) + val2 * mix) * v->eg1_val;
   return (val1 * (1. - mix) + val2 * mix) * v->eg1_val;
@@ -1072,6 +1079,7 @@ static void harm_init(Harmonics *h,short pitch_arr[]) {
 static void upd_titles() { // update sliders
   mix_1_2.cmd();
   detune.cmd();
+  pitch_osc2.cmd(),
   filt_coff.cmd();
   filt_q.cmd();
   eg2_mod_filt.cmd();
@@ -1103,8 +1111,8 @@ static void* connect_mkeyb(void* d) {
 
 int main(int argc,char **argv) {
   read_screen_dim(&tw_colums,&tw_rows);
-  if (tw_colums<111 || tw_rows<14) {
-    printf("window = %d x %d (must be 111 x 14)\n",tw_colums,tw_rows);
+  if (tw_colums<111 || tw_rows<15) {
+    printf("window = %d x %d (must be 111 x 15)\n",tw_colums,tw_rows);
     return 1;
   }
   if (snd_init(sample_rate,nr_samples,2) < 0) {
@@ -1214,7 +1222,7 @@ int main(int argc,char **argv) {
 
   tw_custom_init(
     &adsr_amp.adsr,
-    (Rect){62,2,18,2},
+    (Rect){63,2,18,2},
     adsr_amp_draw,
     adsr_amp_mouse
   ); 
@@ -1248,21 +1256,33 @@ int main(int argc,char **argv) {
        adsr_filt_draw(&adsr_filt.adsr);
      }
   );
-
+  int xpos=48,
+      ypos=1;
   tw_hor_slider_init(
     &detune,
-    (Rect){49,1,0,0},
-    2,
+    (Rect){xpos,ypos,0,0},
+    3,
     &patch.detune,
-    ^{ float det[3]={0.0,0.00002,0.00004};
+    ^{ float det[4]={0.0, 0.00002, 0.00003, 0.00004};
        vcom.detune=det[patch.detune];
-       sprintf(detune.title,"det=%g",vcom.detune*1000);
+       sprintf(detune.title,"det osc2=%g",vcom.detune*1000);
+     }
+  );
+
+  tw_hor_slider_init(
+    &pitch_osc2,
+    (Rect){xpos,ypos+=2,0,0},
+    6,
+    &patch.pitch_osc2,
+    ^{ float pit[7]={0.5,0.75,1,1.5,2,3,4}; // not: 2./3.
+       vcom.pitch_osc2=pit[patch.pitch_osc2];
+       sprintf(pitch_osc2.title,"pitch osc2=%.2g",vcom.pitch_osc2);
      }
   );
 
   tw_hor_slider_init(
     &filt_coff,
-    (Rect){49,3,0,0},
+    (Rect){xpos,ypos+=2,0,0},
     modwheel_len-1,
     &patch.filt_coff,
     ^{ vcom.fixed_cutoff=coff[patch.filt_coff];
@@ -1272,7 +1292,7 @@ int main(int argc,char **argv) {
 
   tw_hor_slider_init(
     &filt_q,
-    (Rect){49,5,0,0},
+    (Rect){xpos,ypos+=2,0,0},
     5,
     &patch.filt_q,
     ^{ float q[6]={1, 1.5, 2, 2.5, 3, 3.5};
@@ -1283,23 +1303,40 @@ int main(int argc,char **argv) {
 
   tw_hor_slider_init(
     &eg2_mod_filt,
-    (Rect){49,7,0,0},
+    (Rect){xpos,ypos+=2,0,0},
     5,
     &patch.eg2_mod_filt,
     ^{ float emf[6]={0,0.2,0.5,0.7,1,1.5};
        vcom.eg2_mod_filt=emf[patch.eg2_mod_filt];
-       sprintf(eg2_mod_filt.title,"eg->coff=%.2g",vcom.eg2_mod_filt);
+       sprintf(eg2_mod_filt.title,"adsr->coff=%.2g",vcom.eg2_mod_filt);
      }
   );
 
   tw_hor_slider_init(
     &amfm_2_1,
-    (Rect){49,9,0,0},
+    (Rect){xpos,ypos+=2,0,0},
     6,
     &patch.amfm_2_1,
     ^{ float afm[7]={0,0.3,0.5,0.8,1.2,2,3};
        vcom.amfm_2_1=afm[patch.amfm_2_1];
        sprintf(amfm_2_1.title,"AM/FM 2->1=%.2g",vcom.amfm_2_1);
+     }
+  );
+
+  tw_hor_slider_init(
+    &trem_osc,
+    (Rect){xpos,ypos+=2,0,0},
+    8,
+    &patch.trem_osc,
+    ^{ float am[pitwheel_len]={ 0.7,0.5,0.2,0.1,0,0.1,0.2,0.5,0.7 };
+       vcom.trem_osc=am[patch.trem_osc];
+       sprintf(trem_osc.title,"trem osc1=%g",vcom.trem_osc);
+       if (patch.trem_osc == 4) {
+         vcom.trem_enabled=false;
+       } else {
+         vcom.trem_enabled=true;
+         vcom.trem_freq= patch.trem_osc > 4 ? 8 : 4;
+       }
      }
   );
 
@@ -1310,22 +1347,6 @@ int main(int argc,char **argv) {
     adsr_filt_mouse
   ); 
 
-  tw_hor_slider_init(
-    &trem_osc,
-    (Rect){49,11,0,0},
-    8,
-    &patch.trem_osc,
-    ^{ float am[pitwheel_len]={ 0.7,0.5,0.2,0.1,0,0.1,0.2,0.5,0.7 };
-       vcom.trem_osc=am[patch.trem_osc];
-       sprintf(trem_osc.title,"tremolo=%g",vcom.trem_osc);
-       if (patch.trem_osc == 4) {
-         vcom.trem_enabled=false;
-       } else {
-         vcom.trem_enabled=true;
-         vcom.trem_freq= patch.trem_osc > 4 ? 8 : 4;
-       }
-     }
-  );
 
   tw_vert_slider_init(
     &volume,
@@ -1347,7 +1368,7 @@ int main(int argc,char **argv) {
 
   tw_menu_init(
     &patches,
-    (Rect){82,1,28,13},
+    (Rect){83,1,28,14},
     &patch_nr,
     "patches",
     patch_names,

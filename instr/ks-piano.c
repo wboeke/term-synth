@@ -204,7 +204,7 @@ static void stop_conn_mk() {
 
 static void set_lfo() {   // called once per frame
   const float fr=0.3;
-  lfo1_pos +=  PI2 * fr / sample_rate * nr_samples;
+  lfo1_pos +=  PI2 * fr * nr_samples / sample_rate;
   if (lfo1_pos>PI2) lfo1_pos -= PI2;
   lfo1[0]=lfo1[1];
   lfo1[1]=sinf(lfo1_pos);
@@ -226,7 +226,7 @@ void* play(void* d) {
 
     if (mkb_connected) {
       for (int i=0;i<nr_samples*2;++i)
-        out_buf_s[i]=minmax(-32000, buffer[i]*20000, 32000);
+        out_buf_s[i]=minmax(-32000, buffer[i]*30000, 32000);
       if (snd_write(out_buf_s,nr_samples)<0) { mkb_connected=0; break; }
       if (mkb_connected && recording)
         dump_wav(out_buf_s,nr_samples);
