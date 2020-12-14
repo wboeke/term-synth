@@ -43,11 +43,13 @@ int snd_init(uint32_t sr,int nr_samples,uint8_t chs) {
 }
 
 int snd_write(short *buffer,int nr_samples) {
-//int pcm_snd_write(float *buffer,int nr_samples) {
   if (!playback_handle) return -1;
   int ret=snd_pcm_writei(playback_handle, buffer, nr_samples);
-  if (ret<0)
-    LOG("pcm_snd_write: err=%d: %s",ret,snd_strerror(ret));
+  if (ret<0) {
+    LOG("snd_write: %s",snd_strerror(ret)); // xrun will recover
+    if (ret == -EPIPE)    // xrun 
+      ret = snd_pcm_prepare(playback_handle);
+  }
   return ret;
 }
 
@@ -63,7 +65,7 @@ void snd_close() {
 #include <math.h>
 enum {
 //  sample_rate = 48000, nr_samples = 512, nr_channels=2,
-  sample_rate = 22050, nr_samples = 512, nr_channels=2,
+  sample_rate = 22050, nr_samples = 256, nr_channels=2,
 //  sample_rate = 44100, nr_samples = 512, nr_channels=2,
 };
 

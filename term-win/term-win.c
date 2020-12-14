@@ -42,9 +42,9 @@ void tw_exit(void) {
   if (do_exit) do_exit();
   if (quit_message[0]) {
     LOG("%s",quit_message);
-    puts(quit_message); quit_message[0]=0;
+    quit_message[0]=0;
   }
-  else puts("Bye!");
+  LOG("Bye!");
 }
 
 void sig_handler(int sig) {
@@ -325,7 +325,7 @@ void tw_hor_slider_init(tw_HorSlider *sl,Rect rect,short mv,short *v,void (^_cmd
   add_to_list(sl,is_hor_slider);
   sl->val=v;
   sl->maxv=mv;
-  sl->xgrid= mv>3 ? 1 : 2;
+  sl->xgrid= mv>2 ? 1 : 2;
   sl->wb.area=(Rect){ rect.x, rect.y, sl->xgrid * sl->maxv + 2, 2 };
   sl->cmd=_cmd;
 }
@@ -453,6 +453,7 @@ void tw_draw() {
         LOG("tw_draw: type %d?",type);
     }
   }
+  fflush(stdout); // in case terminal mode O_NONBLOCK
 }
 
 WBase* in_a_win(short x, short y) {
@@ -475,8 +476,8 @@ typedef struct {
   tw_Custom *cust;
 } WidgetPtr; // pointers to widgets
 
-static void handle_event(short ev_type, short ev_x, short ev_y, short button) {
-  //LOG("handle_event: type=%d but=%d",ev_type,button);
+void handle_event(short ev_type, short ev_x, short ev_y, short button) {
+  //LOG("handle_event: type=%d but=%d x=%d y=%d",ev_type,button,ev_x,ev_y);
   static WidgetPtr pt;
   WBase *wb;
   switch (ev_type) {
@@ -512,7 +513,7 @@ static void handle_event(short ev_type, short ev_x, short ev_y, short button) {
           pt.chb=(tw_Checkbox*)wb;
           *pt.chb->val=!*pt.chb->val;
           checkbox_draw(pt.chb);
-          pt.chb->cmd();
+          if (pt.chb->cmd) pt.chb->cmd();
           break;
         case is_custom:
           pt.cust=(tw_Custom*)wb;
@@ -576,6 +577,7 @@ static void handle_event(short ev_type, short ev_x, short ev_y, short button) {
       break;
     default: LOG("handle_event: ev_type %d?",ev_type);
   }
+  fflush(stdout); // in case terminal mode O_NONBLOCK
 }
 
 void (^tw_key_event)(uint16_t ch);

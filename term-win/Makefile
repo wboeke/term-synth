@@ -1,5 +1,5 @@
 CC := clang
-CFLAGS := -g -O -ferror-limit=2 -Wuninitialized -Wno-logical-op-parentheses -fblocks -fsanitize=safe-stack
+CFLAGS := -O -ferror-limit=2 -Wuninitialized -Wno-logical-op-parentheses -fblocks -fsanitize=safe-stack
 
 .SUFFIXES=
 

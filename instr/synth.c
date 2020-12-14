@@ -24,7 +24,7 @@ The Moog filter is from:
 #include "shared.h"
 
 enum {
-  nr_samples=512,
+  nr_samples=256, // 128: sometimes xrun
   sample_rate=44100,
   rrate=8,
   voices_max=6,
@@ -103,7 +103,6 @@ static tw_HorSlider
 static tw_VertSlider
    volume;
 static tw_Checkbox
-   connect_mkb, // not used
    record;
 static Harmonics
    harm_win1,
@@ -234,7 +233,7 @@ static Patch bi_patches[] = {
   { "church bell", {0,1,0,3,0,1,0,0,2,0}, {0,0,0,0,0,0,0,0,3,0},
     4,4,2,1,2, 0,4,2,4, 4,0,-1,-1, { 2,1,1,5,1 }, { 0,5,0,4 }, 4 },
   { "perlin noise", {}, {},
-      5,-1,0,0,2, 0,2,2,2, 4,0,-1,-1, { 2,4,1,3,1 }, { 0,3,1,3 }, 3 },
+      5,-1,0,0,2, 0,4,1,0, 4,0,-1,-1, { 1,4,1,3,1 }, { 0,3,1,3 }, 3 },
   { "r-formant", {}, {},
     6,-1,0,0,2, -1,1,0,0, 4,0,0,-1, { 2,2,1,3,0 }, { 0,3,1,3 }, 2 },
   { "c-formant", {0,4,0,0,0,0,0,0,0,4,0}, {},
@@ -273,9 +272,9 @@ typedef struct {
     ks_buffer[stringlen_max],
     stringcutoff;
   short
-    eg1_phase,//=Idle,
-    eg2_phase,//=Decay,
-    midi_nr, //=60;
+    eg1_phase,
+    eg2_phase,
+    midi_nr,
     stringpos,
     stringlen;
 } Values;
@@ -502,15 +501,6 @@ static void pitchWheel(uint8_t val) {
   }
 }
 
-void stop_conn_mk() {
-  mkb_connected=false;
-  usleep(300000);
-  if (mkb_connected) {
-    checkbox_draw(&connect_mkb);
-    fflush(stdout);
-  }
-}
-
 static float get(Lfo *lfo, float freq) {
   float dir= lfo->dir ? 1.0 : -1.0;
   lfo->lfo_pos += dir * 8 * freq / sample_rate * nr_samples;
@@ -520,10 +510,6 @@ static float get(Lfo *lfo, float freq) {
 }
 
 static void slow_add(float *act_val,const float nom_val,const float add_val) {
-/*
-  const x=0.999, a = x, b = 1 - x;
-  *act_val=nom_val * b + *act_val * a;
-*/
   if (*act_val>nom_val+add_val) *act_val-=add_val;
   else if (*act_val<nom_val-add_val) *act_val+=add_val;
 }
@@ -696,8 +682,8 @@ static void fill_buffer(Values *v, float *buffer) {
       switch (v->eg1_phase) {
         case Idle: return;
         case Attack:
-          v->eg1_val = (v->eg1_val-1.) * (1.-vcom.attack) + 1.;
-          if (v->eg1_val>0.95) v->eg1_phase=Decay;
+          v->eg1_val = (v->eg1_val-1.05) * (1.-vcom.attack) + 1.05;
+          if (v->eg1_val>1.) v->eg1_phase=Decay;
           break;
         case Decay:
           if (v->eg1_val<0.02) v->eg1_val *= 0.99;
@@ -715,12 +701,13 @@ static void fill_buffer(Values *v, float *buffer) {
       switch (v->eg2_phase) {
         case Attack:
           v->eg2_val=vcom.start_lev_f;
-          if (patch.adsr_f_data.y0 == patch.adsr_f_data.y1) { v->eg2_phase=Sustain; goto start; }
-          else { v->eg2_phase=Decay; goto start; }
+          if (patch.adsr_f_data.y0 == patch.adsr_f_data.y1) v->eg2_phase=Sustain;
+          else v->eg2_phase=Decay;
+          goto start;
         case Decay: {
-          float lev=vcom.sustain_f;
-          v->eg2_val = (v->eg2_val-lev) * (1. - vcom.decay_f * v->freq_track) + lev;
-          if (fabs(v->eg2_val-lev) < 0.01) v->eg2_phase=Sustain;
+            float lev=vcom.sustain_f;
+            v->eg2_val = (v->eg2_val-lev) * (1. - vcom.decay_f * v->freq_track) + lev;
+            if (fabs(v->eg2_val-lev) < 0.01) { v->eg2_phase=Sustain; goto start; }
           }
           break;
         case Release: {
@@ -732,7 +719,6 @@ static void fill_buffer(Values *v, float *buffer) {
         default: break;
       }
 
-      //float tmp=v->freq_scale * (vcom.fixed_cutoff + 2. * (v->eg2_val - 1) * vcom.eg2_mod_filt);// must be > 0
       float tmp= fmaxf(0,v->freq_scale *
         (vcom.fixed_cutoff + 2. * (v->eg2_val - 1) * vcom.eg2_mod_filt));  // eg2_val = 0 -> 2
 
@@ -799,12 +785,6 @@ static void* play(void* d) {
     for (int8_t v=0; v<voices_max; ++v)
       fill_buffer(vals+v,buffer);
     split(buffer,out_buf);
-/*
-    for (int i=0;i<nr_samples;++i) {
-      short val=32000 * tw_fminmax(-1., buffer[i], 1.);
-      out_buf[2*i]=out_buf[2*i+1]=val;
-    }
-*/
     if (mkb_connected) {
       if (snd_write(out_buf,nr_samples)<0) {
         mkb_connected=false; break;
@@ -1098,13 +1078,11 @@ static void upd_titles() { // update sliders
 }
 static void* connect_mkeyb(void* d) {
   uint8_t mbuf[3];
-  //mkb_connected=true; <-- set allready
   while (read_midi_bytes(mbuf)) {
     if (!mkb_connected) { close_midi_kb(); return 0; } // <-- if ctrl_C pressed
     eval_midi_mes(mbuf); 
   }
   mkb_connected=false; // <-- if keyboard was disconnected
-  //checkbox_draw(connect_mkb);
   close_midi_kb();
   return 0;
 }
@@ -1123,22 +1101,9 @@ int main(int argc,char **argv) {
     puts("midi keyboard not connected");
     return 1;
   }
-  mkb_connected=true;
-  pthread_create(&conn_thread,0,connect_mkeyb,0);
-  pthread_create(&audio_thread, 0, play, 0);
-
-  tw_gui_init();
   do_exit= ^{
     mkb_connected=false;
     if (audio_thread) { pthread_join(audio_thread,0); audio_thread=0; }
-  };
-  patch=bi_patches[0];
-  for (int z = 0; z < grad_max; ++z)
-    gradients[z] = rand_val();
-
-  tw_key_event=^(uint16_t ch) {
-    LOG("key=%c",ch);
-    if (ch=='p') patch_report();
   };
 
   for (int i=0;i<voices_max;++i) {
@@ -1147,13 +1112,27 @@ int main(int argc,char **argv) {
     v->eg2_phase=Decay;
     v->midi_nr=60;
   }
+  for (int z = 0; z < grad_max; ++z)
+    gradients[z] = rand_val();
+
+  pthread_create(&conn_thread,0,connect_mkeyb,0);
+  mkb_connected=true;
+  pthread_create(&audio_thread, 0, play, 0);
+
+  patch=bi_patches[0];
+  tw_key_event=^(uint16_t ch) {
+    LOG("key=%c",ch);
+    if (ch=='p') patch_report();
+  };
+
+  tw_gui_init();
 
   tw_menu_init(
     &wform_osc1,
     (Rect){1,1,4,9},
     &patch.wform_osc1,
     "osc1",
-    (char*[]){ "","","","","","perlin","formant","karp-strong", 0 },
+    (char*[]){ "","","","","","perlin noise","formant","karplus-strong", 0 },
     ^{ if (wform_osc1.prev_val==patch.wform_osc1) patch.wform_osc1=-1; }
   );
 

@@ -35,7 +35,7 @@ extern char quit_message[100];
 
 enum {  // constants
   k_esc=033,
-  max_wids=50, // max widgets
+  max_wids=40, // max widgets
   amax=40, // max array len
   grey=233
 };
@@ -167,6 +167,7 @@ void tw_custom_init(tw_Custom *cust,Rect area,void (^draw)(tw_Custom*),
 void tw_start_main_loop();
 void tw_print(short x,short y,short bg,char *msg,short spec);
 void (^tw_key_event)(uint16_t ch);
+void handle_event(short ev_type, short ev_x, short ev_y, short button);
 void (^do_exit)();
 
 static short tw_div(short a,short b) { // okay if a<0 or b<0 

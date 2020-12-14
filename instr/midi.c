@@ -10,7 +10,7 @@
 static int fd_in = -1;
 
 bool open_midi_kb() {
-  char *node[]={ "/dev/midi", "/dev/midi1", "/dev/mid2" };
+  char *node[]={ "/dev/midi", "/dev/midi1", "/dev/midi2" };
   for (int i=0; i<3; ++i) {
     fd_in = open(node[i], O_RDONLY, 0);
     if (fd_in>=0) {

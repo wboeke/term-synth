@@ -15,7 +15,7 @@
 #include "shared.h"
 
 enum {  // const's
-  sample_rate = 44100, nr_samples = 512, nr_channels=2,
+  sample_rate = 44100, nr_samples = 256, nr_channels=2,
   num_pitch_max = 20,
   voices_max = 6, // max polyphony
   h_xgrid = 2,    // pitches distance
@@ -28,7 +28,7 @@ enum {  // const's
 
 static short
   patch_nr,
-  clip_val,
+  dist_val,  // clipping (or distortion)
   mnr2vnr[128];
 static bool
   recording,
@@ -56,9 +56,6 @@ enum {
   eFM_2h
 };
 enum {
-  eEqual, // for semi_log()
-  eUp,
-  eDown,
   eKc_tone,
   eKc_noise
 };
@@ -74,7 +71,7 @@ static struct {
     kc_freq,
     kc_amp,
     trem_val,
-    clip_val,
+    dist_val,
     lfo_val[2];
   bool
     trem_enabled;
@@ -132,11 +129,9 @@ static Patch bi_patches[]= {
     .fm_modu=0, .detune_fm=0, .detune_2p=1, .kc_mode=1, .kc_dur=3, .kc_amp=1, .trem_val=4,
     .non_lin=-1, .out_volume=3, .adsr_x1=0, .adsr_x2=5, .adsr_y2=0, .adsr_x4=3
   },
-  { "el.piano1", {0,5,2,3,0,3,0,0,0,0,0,2,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    0,0,0,2,6,3,5,0,3, 0,5,0,3 },
-  { "el.piano2", {0,0,0,5,0,0,0,5,0,0,0,3,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+  { "el.piano1", {0,0,0,5,0,0,0,5,0,0,0,3,0,0,0,2,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     4,2,0,2,4,2,4,3,4, 0,5,0,3 },
-  { "el.piano3", {0,5,0,5,4}, {0,0,0,0,1},
+  { "el.piano2", {0,5,0,5,4}, {0,0,0,0,1},
     1,0,4,-1,0,0,4,0,4, 0,5,0,3 },
   { "hammond1", {6,3,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     0,0,0,3,2,2,6,-1,4, 0,5,1,3 },
@@ -250,7 +245,6 @@ static tw_Menu
   fm_mode;
 
 static tw_Checkbox
-  connect_mkb,
   record;
 
 static tw_Custom
@@ -568,14 +562,6 @@ void eval_midi_mes(const uint8_t *midi_mes) {
   }
 }
 
-void stop_conn_mk() {
-  mkb_connected=false;
-  usleep(500000);
-  checkbox_draw(&connect_mkb);
-  monitor.draw(&monitor);
-  fflush(stdout);
-}
-
 static pthread_t
   conn_thread,
   audio_thread;
@@ -591,8 +577,10 @@ static void once_per_frame() {
   }
 }
 
-static void semi_log(float end, float incr, uint8_t direction, float *val, uint8_t *old_phase, uint8_t new_phase) {
-  float mult = fabs(*val-end)+0.1;
+static void semi_log(float end, float incr, float *val, uint8_t *old_phase, uint8_t new_phase) {
+  enum { eEqual, eUp, eDown };
+  float mult = fabs(*val-end)+0.05;
+  int direction = *val-end < 0.02 ? eUp : *val-end > 0.02 ? eDown : eEqual;
   switch (direction) {
     case eEqual:
       *old_phase=new_phase;
@@ -608,35 +596,34 @@ static void semi_log(float end, float incr, uint8_t direction, float *val, uint8
   }
 }
 
-static float calc_eg1(Values *v,float val,uint8_t *phase) {
+static void calc_eg1(Values *v,float *val,uint8_t *phase) {
   switch (*phase) {
     case eAttack:
-      semi_log(1.,eg1.attack,eUp,&val,phase,eDecay);
+      semi_log(1.,eg1.attack,val,phase,eDecay);
       break;
     case eDecay:
-      semi_log(eg1.sus,eg1.decay * v->freq_track,eDown,&val,phase,eSustain); // freq dependent decay
+      semi_log(eg1.sus,eg1.decay * v->freq_track,val,phase,eSustain); // freq dependent decay
       break;
     case eRelease:
-      semi_log(0,eg1.release,eDown,&val,phase,eIdle);
+      semi_log(0,eg1.release,val,phase,eIdle);
       break;
     case eSustain:
       break;
     default:
       LOG("calc_eg1: phase=%d?",*phase);
   }
-  //if (cnt%2000==0) LOG("calc_eg:val=%.2f",val)
-  return val;
+  //if (cnt%2000==0) LOG("calc_eg:val=%.2f",*val)
 }
 
-static float calc_startup(Values *v,float act_stup,uint8_t *phase) {
+static void calc_startup(Values *v,float *val,uint8_t *phase) {
   switch (*phase) {
     case eAttack:
       if (patch.kc_dur>0) {
-        act_stup+=vcom.su_dec_rate;
-        if (act_stup>1) { act_stup=1; *phase=eSustain; }
+        *val += vcom.su_dec_rate;
+        if (*val>1) { *val=1; *phase=eSustain; }
       } else {
         *phase=eSustain;
-        act_stup=1;
+        *val=1;
       }
       break;
     case eSustain:
@@ -644,7 +631,6 @@ static float calc_startup(Values *v,float act_stup,uint8_t *phase) {
     default:
       LOG("calc_startup: phase %d?",*phase);
   }
-  return act_stup;
 }
 
 void adsr_init() {
@@ -737,8 +723,8 @@ static float oscillator(Values *v,float fr1) {
 }
 
 void clip(float *buf) { // soft clipping
-  if (!vcom.clip_val)return;
-  const float drive=vcom.clip_val,
+  if (!dist_val) return;
+  const float drive=vcom.dist_val,
               mult=2;
   for (int i=0;i<nr_samples;++i) {
     const float x=buf[i]*mult;
@@ -750,16 +736,19 @@ static void fill_buffer(Values *v,float *buffer) {
   for (int i=0;i<nr_samples;++i) {
     if (i%rrate==0) {
       if (v->eg1_phase!=eIdle) {
-        v->eg1_val=calc_eg1(v,v->eg1_val,&v->eg1_phase);
-        v->act_startup=calc_startup(v,v->act_startup,&v->stup_phase);
+        calc_eg1(v,&v->eg1_val,&v->eg1_phase);
+
+        calc_startup(v,&v->act_startup,&v->stup_phase);
         v->stup_amp=1 - v->act_startup * v->act_startup;
 
-        v->act_ampl=v->eg1_val * v->key_velocity * 0.01; // ampl scaling
+        v->act_ampl=v->eg1_val * v->key_velocity;
         set_lfo(v,i);
       }
     }
     if (v->eg1_phase==eIdle) continue;
-    buffer[i] += oscillator(v, v->freq_val * PI2 / sample_rate) * v->act_ampl;
+    float out= oscillator(v, v->freq_val * PI2 / sample_rate) * v->act_ampl;
+    // if (dist_val) out *= 1 - vcom.dist_val * 0.1 * fabs(out);  <-- distortion
+    buffer[i] += out * 0.01;
   }
 }
 
@@ -827,15 +816,19 @@ int main(int argc,char **argv) {
     puts("midi keyboard not connected");
     return 1;
   }
-  mkb_connected=true; // needed for play()
+  for (int i=0;i<voices_max;++i) { // init before thread create 
+    vals[i].freq_val=mid_C;
+    vals[i].eg1_phase=eIdle;
+  }
   pthread_create(&conn_thread,0,connect_mkeyb,0);
+  mkb_connected=true; // needed for play()
   pthread_create(&audio_thread, 0, play, 0);
 
   tw_gui_init();
 
   do_exit= ^{
     mkb_connected=false;
-    if (audio_thread) pthread_join(audio_thread,0);
+    if (audio_thread) { pthread_join(audio_thread,0); audio_thread=0; }
     // connect thread may block, so not joined
   };
 
@@ -844,12 +837,12 @@ int main(int argc,char **argv) {
     LOG("key=%c",ch);
     if (ch=='p') report_patch(stderr);
   };
-
+/*
   for (int i=0;i<voices_max;++i) {
     vals[i].freq_val=mid_C;
     vals[i].eg1_phase=eIdle;
   }
-
+*/
   tw_custom_init(
     &harmonics,
     (Rect){1,0,(num_pitch_max+1)*h_xgrid,h_amp_max},
@@ -918,10 +911,10 @@ int main(int argc,char **argv) {
     &clip_sl,
     (Rect){xpos+10,ypos+4,0,0},
     3,
-    &clip_val,
-    ^{ float clip[]={ 0,1,2,4 };
-       vcom.clip_val=clip[clip_val];
-       sprintf(clip_sl.title,"ovdrive=%.1g",vcom.clip_val);
+    &dist_val,
+    ^{ float dis[]={ 0,1,2,4 };
+       vcom.dist_val=dis[dist_val];
+       sprintf(clip_sl.title,"dist=%.1g",vcom.dist_val);
      }
   );
   clip_sl.cmd();
