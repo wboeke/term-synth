@@ -75,9 +75,3 @@ terminal colors respectivily.
 
 Note that for the GUI several unicode char's are used with so-called ambiguous width. In
 your terminal settings set them to Narrow (that's a width of 1).
-
-You may have noticed that this README is rather rudimentary. Maybe it will be augmented
-later, but anyhow, here is a screenshot of the synth:
-
-
-![synth](http://members.chello.nl/w.boeke/tw-synth/tw-synth.png)
